@@ -48,8 +48,10 @@ The persisted state is:
   rawLists: { [listId]: "raw list text" },
   customRules: "raw custom Adblock rules",
   compiledIndex: {
-    hostBlocks: string[],
-    hostAllows: string[],
+    hostBlocksExact: string[],
+    hostAllowsExact: string[],
+    hostBlocksSubtree: string[],
+    hostAllowsSubtree: string[],
     regexBlocks: { source, flags }[],
     regexAllows: { source, flags }[],
     builtAt: number
@@ -89,12 +91,16 @@ Key exports:
 Matching order:
 
 1. Ignore invalid URLs and non-HTTP(S) URLs.
-2. Check host allow rules.
-3. Check regex allow rules.
-4. Check host block rules.
-5. Check regex block rules.
+2. Check exact host allow rules.
+3. Check subtree host allow rules.
+4. Check regex allow rules.
+5. Check exact host block rules.
+6. Check subtree host block rules.
+7. Check regex block rules.
 
-Host matching walks up subdomains. For `a.b.example.com`, it checks:
+Exact host rules match only the visited hostname. A hosts-file mapping or bare domain rule for `example.com` blocks `example.com`, but not `www.example.com`.
+
+Subtree host rules come from Adblock host rules such as `||example.com^`. Subtree matching walks up subdomains. For `a.b.example.com`, it checks:
 
 - `a.b.example.com`
 - `b.example.com`
@@ -117,7 +123,7 @@ This parser accepts hosts-file mapping lines where the first token is one of:
 
 It strips `#` comments, normalizes domains to lowercase ASCII/punycode, trims one trailing dot, and rejects invalid DNS labels.
 
-It skips local aliases such as `localhost`.
+Hosts-file entries are exact host blocks. It skips local aliases such as `localhost`.
 
 ### Adblock Parser
 
@@ -127,6 +133,7 @@ Supported rule types include:
 
 - `||example.com^` host blocks.
 - `@@||example.com^` host allow rules.
+- `example.com` exact host blocks.
 - `|https://example.com/path*` URL pattern rules.
 - `example.com/ads` generic URL pattern rules.
 - `/regex/` regex rules.

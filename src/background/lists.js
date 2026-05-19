@@ -19,10 +19,19 @@ let compilePromise = null;
 
 export async function addList({ name, url, updateIntervalDays = 7 }) {
   const state = await getState();
+  const normalizedUrl = normalizeListUrl(url);
+  if (
+    state.lists.some(
+      (list) => normalizeStoredListUrl(list.url) === normalizedUrl,
+    )
+  ) {
+    throw new Error("This list has already been added.");
+  }
+
   const list = {
     id: crypto.randomUUID(),
-    name: name?.trim() || new URL(url).hostname,
-    url: url.trim(),
+    name: name?.trim() || new URL(normalizedUrl).hostname,
+    url: normalizedUrl,
     format: "auto",
     detectedFormat: null,
     enabled: true,
@@ -48,6 +57,22 @@ export async function addList({ name, url, updateIntervalDays = 7 }) {
     await saveRawLists(rawLists);
     await reconcileAlarms();
     throw error;
+  }
+}
+
+export function normalizeListUrl(value) {
+  try {
+    return new URL(String(value || "").trim()).href;
+  } catch {
+    throw new Error("Enter a valid list URL.");
+  }
+}
+
+function normalizeStoredListUrl(value) {
+  try {
+    return normalizeListUrl(value);
+  } catch {
+    return null;
   }
 }
 
@@ -250,8 +275,10 @@ export function parseListText(text, format = "auto") {
 export function parseCustomRules(text) {
   if (!text.trim()) {
     return {
-      hostBlocks: new Set(),
-      hostAllows: new Set(),
+      hostBlocksExact: new Set(),
+      hostAllowsExact: new Set(),
+      hostBlocksSubtree: new Set(),
+      hostAllowsSubtree: new Set(),
       regexBlocks: [],
       regexAllows: [],
       warnings: [],
@@ -272,8 +299,10 @@ export function parseCustomRules(text) {
 
 function asHostsParsed(parsed, detectedFormat) {
   return {
-    hostBlocks: parsed.hosts,
-    hostAllows: new Set(),
+    hostBlocksExact: parsed.hosts,
+    hostAllowsExact: new Set(),
+    hostBlocksSubtree: new Set(),
+    hostAllowsSubtree: new Set(),
     regexBlocks: [],
     regexAllows: [],
     warnings: parsed.warnings,
@@ -284,8 +313,10 @@ function asHostsParsed(parsed, detectedFormat) {
 
 function countRules(parsed) {
   return (
-    (parsed.hostBlocks?.size || parsed.hosts?.size || 0) +
-    (parsed.hostAllows?.size || 0) +
+    (parsed.hostBlocksExact?.size || 0) +
+    (parsed.hostAllowsExact?.size || 0) +
+    (parsed.hostBlocksSubtree?.size || 0) +
+    (parsed.hostAllowsSubtree?.size || 0) +
     (parsed.regexBlocks?.length || 0) +
     (parsed.regexAllows?.length || 0)
   );

@@ -5,7 +5,12 @@ import {
   hydrateIndex,
   serializeIndex,
 } from "../src/background/engine.js";
-import { parseCustomRules, parseListText } from "../src/background/lists.js";
+import {
+  addList,
+  normalizeListUrl,
+  parseCustomRules,
+  parseListText,
+} from "../src/background/lists.js";
 import { parseAdblock } from "../src/background/parser/adblock.js";
 import { parseHosts } from "../src/background/parser/hosts.js";
 
@@ -37,16 +42,33 @@ test("adblock parser supports host blocks, host allows, regexes, and cosmetic sk
     /[/
   `);
 
-  assert.equal(parsed.hostBlocks.has("ads.example.com"), true);
-  assert.equal(parsed.hostAllows.has("allowed.example.com"), true);
+  assert.equal(parsed.hostBlocksSubtree.has("ads.example.com"), true);
+  assert.equal(parsed.hostAllowsSubtree.has("allowed.example.com"), true);
   assert.equal(parsed.regexBlocks.length, 3);
   assert.equal(parsed.warnings.length >= 2, true);
 });
 
+test("adblock parser supports bare domain lines and hash comments", () => {
+  const parsed = parseAdblock(`
+    # comment
+    example.com
+    example.org
+    example.net # inline comment
+    *.example.test
+    example.com##.ad
+  `);
+
+  assert.equal(parsed.hostBlocksExact.has("example.com"), true);
+  assert.equal(parsed.hostBlocksExact.has("example.org"), true);
+  assert.equal(parsed.hostBlocksExact.has("example.net"), true);
+  assert.equal(parsed.regexBlocks.length, 1);
+  assert.equal(parsed.warnings.length, 1);
+});
+
 test("engine applies allow rules before block rules", () => {
   const index = hydrateIndex({
-    hostBlocks: ["example.com"],
-    hostAllows: ["safe.example.com"],
+    hostBlocksSubtree: ["example.com"],
+    hostAllowsSubtree: ["safe.example.com"],
     regexBlocks: [{ source: "ads", flags: "i" }],
     regexAllows: [{ source: "allowed-path", flags: "i" }],
     builtAt: 1,
@@ -62,27 +84,56 @@ test("engine applies allow rules before block rules", () => {
   assert.equal(evaluate("chrome://extensions", index).blocked, false);
 });
 
+test("engine treats exact host rules differently from subtree host rules", () => {
+  const exact = hydrateIndex({
+    hostBlocksExact: ["example.com"],
+    regexBlocks: [],
+    regexAllows: [],
+    builtAt: 1,
+  });
+  const subtree = hydrateIndex({
+    hostBlocksSubtree: ["example.com"],
+    regexBlocks: [],
+    regexAllows: [],
+    builtAt: 1,
+  });
+
+  assert.equal(evaluate("https://example.com/page", exact).blocked, true);
+  assert.equal(evaluate("https://www.example.com/page", exact).blocked, false);
+  assert.equal(evaluate("https://example.com/page", subtree).blocked, true);
+  assert.equal(evaluate("https://www.example.com/page", subtree).blocked, true);
+});
+
 test("compiled index can serialize and hydrate", () => {
   const serialized = serializeIndex({
-    hostBlocks: new Set(["b.example", "a.example"]),
-    hostAllows: new Set(["allow.example"]),
+    hostBlocksExact: new Set(["b.example", "a.example"]),
+    hostAllowsExact: new Set(["allow.example"]),
+    hostBlocksSubtree: new Set(["subtree.example"]),
+    hostAllowsSubtree: new Set(["allow-subtree.example"]),
     regexBlocks: [/ads/i],
     regexAllows: [{ source: "safe", flags: "i" }],
     builtAt: 42,
   });
   const hydrated = hydrateIndex(serialized);
 
-  assert.deepEqual(serialized.hostBlocks, ["a.example", "b.example"]);
+  assert.deepEqual(serialized.hostBlocksExact, ["a.example", "b.example"]);
+  assert.deepEqual(serialized.hostBlocksSubtree, ["subtree.example"]);
   assert.equal(evaluate("https://b.example", hydrated).blocked, true);
+  assert.equal(evaluate("https://x.b.example", hydrated).blocked, false);
+  assert.equal(evaluate("https://x.subtree.example", hydrated).blocked, true);
   assert.equal(evaluate("https://x.test/safe-ads.js", hydrated).blocked, false);
 });
 
 test("list parser automatically detects hosts or adblock format", () => {
   const hosts = parseListText("0.0.0.0 ads.example\n127.0.0.1 tracker.example");
   const adblock = parseListText("||ads.example^\n@@||safe.example^");
+  const domains = parseListText("# comment\nexample.com\nexample.org # comment");
 
   assert.equal(hosts.detectedFormat, "hosts");
   assert.equal(adblock.detectedFormat, "adblock");
+  assert.equal(domains.detectedFormat, "adblock");
+  assert.equal(domains.hostBlocksExact.has("example.com"), true);
+  assert.equal(domains.hostBlocksExact.has("example.org"), true);
 });
 
 test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
@@ -95,8 +146,16 @@ test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
   `);
 
   assert.equal(parsed.detectedFormat, "hosts");
-  assert.equal(parsed.hostBlocks.has("example-fakenews.test"), true);
+  assert.equal(parsed.hostBlocksExact.has("example-fakenews.test"), true);
   assert.equal(parsed.regexBlocks.length, 0);
+});
+
+test("hosts parser output is exact-only after list parsing", () => {
+  const parsed = parseListText("0.0.0.0 example.com");
+  const index = hydrateIndex(serializeIndex(parsed));
+
+  assert.equal(evaluate("https://example.com", index).blocked, true);
+  assert.equal(evaluate("https://www.example.com", index).blocked, false);
 });
 
 test("auto detection rejects ordinary web pages and non-list text", () => {
@@ -115,14 +174,17 @@ test("auto detection rejects ordinary web pages and non-list text", () => {
 
 test("custom rules parse as Adblock syntax", () => {
   const parsed = parseCustomRules(`
+    # comment
+    custom-domain.test
     ||custom-block.test^
     @@||custom-allow.test^
     /custom-ad\\d+\\.js/
   `);
 
   assert.equal(parsed.detectedFormat, "adblock");
-  assert.equal(parsed.hostBlocks.has("custom-block.test"), true);
-  assert.equal(parsed.hostAllows.has("custom-allow.test"), true);
+  assert.equal(parsed.hostBlocksExact.has("custom-domain.test"), true);
+  assert.equal(parsed.hostBlocksSubtree.has("custom-block.test"), true);
+  assert.equal(parsed.hostAllowsSubtree.has("custom-allow.test"), true);
   assert.equal(parsed.regexBlocks.length, 1);
 });
 
@@ -131,4 +193,52 @@ test("custom rules reject non-Adblock text", () => {
     () => parseCustomRules("hello\nnot a filter"),
     /valid Adblock/,
   );
+});
+
+test("list URLs normalize before duplicate checks", () => {
+  assert.equal(
+    normalizeListUrl(" HTTPS://Example.COM:443/list.txt "),
+    "https://example.com/list.txt",
+  );
+  assert.throws(() => normalizeListUrl("not a url"), /valid list URL/);
+});
+
+test("addList rejects duplicate list URLs before fetching", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get(defaults) {
+          return {
+            ...defaults,
+            lists: [
+              {
+                id: "existing",
+                name: "Existing",
+                url: "https://example.com/list.txt",
+              },
+            ],
+          };
+        },
+        async set() {
+          throw new Error("Duplicate list should not write storage.");
+        },
+      },
+    },
+  };
+  globalThis.fetch = async () => {
+    throw new Error("Duplicate list should not fetch.");
+  };
+
+  try {
+    await assert.rejects(
+      () => addList({ url: " HTTPS://Example.COM:443/list.txt " }),
+      /already been added/,
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
 });

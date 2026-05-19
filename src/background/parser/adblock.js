@@ -6,8 +6,10 @@ const UNSUPPORTED_OPTION_RE =
 
 export function parseAdblock(rawText) {
   const output = {
-    hostBlocks: new Set(),
-    hostAllows: new Set(),
+    hostBlocksExact: new Set(),
+    hostAllowsExact: new Set(),
+    hostBlocksSubtree: new Set(),
+    hostAllowsSubtree: new Set(),
     regexBlocks: [],
     regexAllows: [],
     warnings: [],
@@ -15,7 +17,7 @@ export function parseAdblock(rawText) {
 
   for (const [lineIndex, rawLine] of rawText.split(/\r?\n/).entries()) {
     const lineNumber = lineIndex + 1;
-    let line = rawLine.trim();
+    let line = stripDomainListComment(rawLine.trim());
     if (!line || line.startsWith("!")) continue;
 
     if (/\s/.test(line)) {
@@ -37,13 +39,24 @@ export function parseAdblock(rawText) {
 
     const isAllow = line.startsWith("@@");
     if (isAllow) line = line.slice(2);
-    const targetHosts = isAllow ? output.hostAllows : output.hostBlocks;
+    const targetHostsExact = isAllow
+      ? output.hostAllowsExact
+      : output.hostBlocksExact;
+    const targetHostsSubtree = isAllow
+      ? output.hostAllowsSubtree
+      : output.hostBlocksSubtree;
     const targetRegexes = isAllow ? output.regexAllows : output.regexBlocks;
 
     const pattern = stripOptions(line);
+    const bareHost = parseBareDomainRule(pattern);
+    if (bareHost) {
+      targetHostsExact.add(bareHost);
+      continue;
+    }
+
     const host = parseHostnameRule(pattern);
     if (host) {
-      targetHosts.add(host);
+      targetHostsSubtree.add(host);
       continue;
     }
 
@@ -60,6 +73,11 @@ export function parseAdblock(rawText) {
   return output;
 }
 
+function stripDomainListComment(line) {
+  if (line.startsWith("#")) return "";
+  return line.replace(/\s+#.*$/, "").trim();
+}
+
 function isCosmeticRule(line) {
   return line.includes("##") || line.includes("#@#") || line.includes("#?#");
 }
@@ -67,6 +85,11 @@ function isCosmeticRule(line) {
 function stripOptions(line) {
   const optionIndex = line.indexOf("$");
   return (optionIndex === -1 ? line : line.slice(0, optionIndex)).trim();
+}
+
+function parseBareDomainRule(pattern) {
+  const host = normalizeHostname(pattern);
+  return host?.includes(".") ? host : null;
 }
 
 function parseHostnameRule(pattern) {

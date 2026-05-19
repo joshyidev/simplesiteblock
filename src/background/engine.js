@@ -1,6 +1,8 @@
 export const EMPTY_SERIALIZED_INDEX = Object.freeze({
-  hostBlocks: [],
-  hostAllows: [],
+  hostBlocksExact: [],
+  hostAllowsExact: [],
+  hostBlocksSubtree: [],
+  hostAllowsSubtree: [],
   regexBlocks: [],
   regexAllows: [],
   builtAt: 0,
@@ -8,8 +10,10 @@ export const EMPTY_SERIALIZED_INDEX = Object.freeze({
 
 export function hydrateIndex(serialized = EMPTY_SERIALIZED_INDEX) {
   return {
-    hostBlocks: new Set(serialized.hostBlocks || []),
-    hostAllows: new Set(serialized.hostAllows || []),
+    hostBlocksExact: new Set(serialized.hostBlocksExact || []),
+    hostAllowsExact: new Set(serialized.hostAllowsExact || []),
+    hostBlocksSubtree: new Set(serialized.hostBlocksSubtree || []),
+    hostAllowsSubtree: new Set(serialized.hostAllowsSubtree || []),
     regexBlocks: hydrateRegexes(serialized.regexBlocks || []),
     regexAllows: hydrateRegexes(serialized.regexAllows || []),
     builtAt: serialized.builtAt || 0,
@@ -18,8 +22,10 @@ export function hydrateIndex(serialized = EMPTY_SERIALIZED_INDEX) {
 
 export function serializeIndex(index) {
   return {
-    hostBlocks: [...(index.hostBlocks || [])].sort(),
-    hostAllows: [...(index.hostAllows || [])].sort(),
+    hostBlocksExact: [...(index.hostBlocksExact || [])].sort(),
+    hostAllowsExact: [...(index.hostAllowsExact || [])].sort(),
+    hostBlocksSubtree: [...(index.hostBlocksSubtree || [])].sort(),
+    hostAllowsSubtree: [...(index.hostAllowsSubtree || [])].sort(),
     regexBlocks: [...(index.regexBlocks || [])].map(serializeRegex),
     regexAllows: [...(index.regexAllows || [])].map(serializeRegex),
     builtAt: index.builtAt || Date.now(),
@@ -28,17 +34,24 @@ export function serializeIndex(index) {
 
 export function createCombinedIndex(parsedLists) {
   const combined = {
-    hostBlocks: new Set(),
-    hostAllows: new Set(),
+    hostBlocksExact: new Set(),
+    hostAllowsExact: new Set(),
+    hostBlocksSubtree: new Set(),
+    hostAllowsSubtree: new Set(),
     regexBlocks: [],
     regexAllows: [],
     builtAt: Date.now(),
   };
 
   for (const parsed of parsedLists) {
-    for (const host of parsed.hostBlocks || parsed.hosts || [])
-      combined.hostBlocks.add(host);
-    for (const host of parsed.hostAllows || []) combined.hostAllows.add(host);
+    for (const host of parsed.hostBlocksExact || [])
+      combined.hostBlocksExact.add(host);
+    for (const host of parsed.hostAllowsExact || [])
+      combined.hostAllowsExact.add(host);
+    for (const host of parsed.hostBlocksSubtree || [])
+      combined.hostBlocksSubtree.add(host);
+    for (const host of parsed.hostAllowsSubtree || [])
+      combined.hostAllowsSubtree.add(host);
     combined.regexBlocks.push(...(parsed.regexBlocks || []));
     combined.regexAllows.push(...(parsed.regexAllows || []));
   }
@@ -59,13 +72,19 @@ export function evaluate(url, index) {
   }
 
   const host = parsedUrl.hostname.toLowerCase();
-  if (matchesHost(index.hostAllows, host)) return { blocked: false };
+  if (matchesHostExact(index.hostAllowsExact, host)) return { blocked: false };
+  if (matchesHostSubtree(index.hostAllowsSubtree, host))
+    return { blocked: false };
   for (const rule of index.regexAllows || []) {
     if (testRule(rule, url)) return { blocked: false };
   }
 
-  if (matchesHost(index.hostBlocks, host)) {
-    return { blocked: true, reason: `host:${host}` };
+  if (matchesHostExact(index.hostBlocksExact, host)) {
+    return { blocked: true, reason: `host-exact:${host}` };
+  }
+
+  if (matchesHostSubtree(index.hostBlocksSubtree, host)) {
+    return { blocked: true, reason: `host-subtree:${host}` };
   }
 
   for (const rule of index.regexBlocks || []) {
@@ -76,7 +95,11 @@ export function evaluate(url, index) {
   return { blocked: false };
 }
 
-export function matchesHost(hostSet, host) {
+export function matchesHostExact(hostSet, host) {
+  return !!hostSet?.has(host.toLowerCase());
+}
+
+export function matchesHostSubtree(hostSet, host) {
   if (!hostSet || !host) return false;
   const labels = host.toLowerCase().split(".");
   for (let index = 0; index < labels.length; index += 1) {
