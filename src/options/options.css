@@ -24,6 +24,7 @@ body {
 
 button,
 input,
+textarea,
 select {
   font: inherit;
 }
@@ -53,6 +54,7 @@ button.danger {
 }
 
 input,
+textarea,
 select {
   width: 100%;
   min-height: 34px;
@@ -61,6 +63,13 @@ select {
   background: var(--panel);
   color: var(--text);
   padding: 6px 8px;
+}
+
+textarea {
+  min-height: 150px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
 }
 
 .shell {
@@ -175,6 +184,16 @@ h3 {
 
 .add-list-form {
   margin-top: 18px;
+}
+
+.custom-rules-form {
+  margin: 0;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 #disablePasswordForm {

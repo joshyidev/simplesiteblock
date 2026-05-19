@@ -4,6 +4,7 @@ import { parseHosts } from "./parser/hosts.js";
 import {
   getState,
   saveCompiledIndex,
+  saveCustomRules,
   saveLists,
   saveRawLists,
 } from "./storage.js";
@@ -78,6 +79,13 @@ export async function updateListSettings(listId, patch) {
   await reconcileAlarms();
 }
 
+export async function updateCustomRules(rawRules) {
+  const customRules = String(rawRules || "");
+  parseCustomRules(customRules);
+  await saveCustomRules(customRules);
+  return compileAndStoreIndex();
+}
+
 export async function updateListNow(listId) {
   const state = await getState();
   const target = state.lists.find((list) => list.id === listId);
@@ -137,6 +145,8 @@ export async function compileAndStoreIndex() {
 
   const state = await getState();
   const parsedLists = [];
+  if (state.customRules.trim()) parsedLists.push(parseCustomRules(state.customRules));
+
   const lists = state.lists.map((list) => {
     if (!list.enabled || !state.rawLists[list.id]) return list;
     try {
@@ -233,6 +243,29 @@ export function parseListText(text, format = "auto") {
     );
   }
 
+  return parsed;
+}
+
+export function parseCustomRules(text) {
+  if (!text.trim()) {
+    return {
+      hostBlocks: new Set(),
+      hostAllows: new Set(),
+      regexBlocks: [],
+      regexAllows: [],
+      warnings: [],
+      detectedFormat: "adblock",
+    };
+  }
+
+  if (looksLikeHtmlDocument(text)) {
+    throw new Error("Custom rules must use Adblock syntax, not HTML.");
+  }
+
+  const parsed = { ...parseAdblock(text), detectedFormat: "adblock" };
+  if (countRules(parsed) === 0) {
+    throw new Error("Custom rules do not contain any valid Adblock rules.");
+  }
   return parsed;
 }
 

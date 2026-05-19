@@ -5,7 +5,7 @@ import {
   hydrateIndex,
   serializeIndex,
 } from "../src/background/engine.js";
-import { parseListText } from "../src/background/lists.js";
+import { parseCustomRules, parseListText } from "../src/background/lists.js";
 import { parseAdblock } from "../src/background/parser/adblock.js";
 import { parseHosts } from "../src/background/parser/hosts.js";
 
@@ -110,5 +110,25 @@ test("auto detection rejects ordinary web pages and non-list text", () => {
   assert.throws(
     () => parseListText("Welcome to this website\nPrivacy Policy\nSearch"),
     /valid hosts or Adblock/,
+  );
+});
+
+test("custom rules parse as Adblock syntax", () => {
+  const parsed = parseCustomRules(`
+    ||custom-block.test^
+    @@||custom-allow.test^
+    /custom-ad\\d+\\.js/
+  `);
+
+  assert.equal(parsed.detectedFormat, "adblock");
+  assert.equal(parsed.hostBlocks.has("custom-block.test"), true);
+  assert.equal(parsed.hostAllows.has("custom-allow.test"), true);
+  assert.equal(parsed.regexBlocks.length, 1);
+});
+
+test("custom rules reject non-Adblock text", () => {
+  assert.throws(
+    () => parseCustomRules("hello\nnot a filter"),
+    /valid Adblock/,
   );
 });

@@ -24,7 +24,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.settings || changes.compiledIndex) stateReady = null;
-  if (changes.lists || changes.rawLists) {
+  if (changes.lists || changes.rawLists || changes.customRules) {
     stateReady = null;
     void reconcileAlarms();
   }

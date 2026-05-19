@@ -13,6 +13,7 @@ export async function ensureDefaults() {
     settings: state.settings,
     lists: state.lists,
     rawLists: state.rawLists,
+    customRules: state.customRules,
     compiledIndex: state.compiledIndex,
   });
   return state;
@@ -23,6 +24,7 @@ export async function getState() {
     settings: DEFAULT_SETTINGS,
     lists: [],
     rawLists: {},
+    customRules: "",
     compiledIndex: EMPTY_SERIALIZED_INDEX,
   });
 
@@ -33,6 +35,8 @@ export async function getState() {
       stored.rawLists && typeof stored.rawLists === "object"
         ? stored.rawLists
         : {},
+    customRules:
+      typeof stored.customRules === "string" ? stored.customRules : "",
     compiledIndex: stored.compiledIndex || EMPTY_SERIALIZED_INDEX,
   };
 }
@@ -57,6 +61,11 @@ export async function saveLists(lists) {
 export async function saveRawLists(rawLists) {
   await chrome.storage.local.set({ rawLists });
   return rawLists;
+}
+
+export async function saveCustomRules(customRules) {
+  await chrome.storage.local.set({ customRules });
+  return customRules;
 }
 
 export async function saveCompiledIndex(compiledIndex) {

@@ -3,6 +3,7 @@ import { hashPassword, verifyPassword } from "../background/crypto.js";
 import {
   addList,
   removeList,
+  updateCustomRules,
   updateListNow,
   updateListSettings,
 } from "../background/lists.js";
@@ -75,6 +76,19 @@ function renderApp(state) {
             <input name="url" type="url" placeholder="https://example.com/list.txt" required>
           </label>
           <button class="fit" type="submit">Add list</button>
+        </form>
+      </section>
+
+      <section class="panel span">
+        <h2>Custom rules</h2>
+        <form id="customRulesForm" class="custom-rules-form">
+          <label class="field">
+            Adblock syntax
+            <textarea id="customRules" name="customRules" spellcheck="false" rows="8" placeholder="||example.com^&#10;@@||allowed.example.com^">${escapeHtml(state.customRules)}</textarea>
+          </label>
+          <div class="form-actions">
+            <button class="fit" type="submit">Save rules</button>
+          </div>
         </form>
       </section>
 
@@ -220,6 +234,18 @@ function bindEvents(state) {
         });
         await boot();
         setStatus("List added.");
+      });
+    });
+
+  app
+    .querySelector("#customRulesForm")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      await runBusy("Saving custom rules...", async () => {
+        await updateCustomRules(form.get("customRules"));
+        await boot();
+        setStatus("Custom rules saved.");
       });
     });
 
