@@ -1,0 +1,302 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f7f7f4;
+  --text: #202124;
+  --muted: #60646c;
+  --panel: #ffffff;
+  --line: #d8d8d2;
+  --accent: #0b6b5e;
+  --accent-strong: #094d44;
+  --danger: #b42318;
+  --danger-bg: #fff1f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 34px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-strong);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+}
+
+button.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 6px 8px;
+}
+
+.shell {
+  width: min(1120px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0 40px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 2px;
+  font-size: 28px;
+}
+
+h2 {
+  margin-bottom: 14px;
+  font-size: 18px;
+}
+
+h3 {
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+#status {
+  min-height: 20px;
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.panel {
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+}
+
+.span {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.row > * {
+  flex: 1;
+}
+
+.row button,
+.row .fit {
+  flex: 0 0 auto;
+}
+
+.choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.choice label,
+.checkline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.choice input,
+.checkline input {
+  width: auto;
+  min-height: auto;
+}
+
+.list-enabled {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.add-list-form {
+  margin-top: 18px;
+}
+
+#disablePasswordForm {
+  margin-top: 12px;
+}
+
+table {
+  width: 100%;
+  min-width: 940px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+td.actions {
+  display: flex;
+  gap: 8px;
+}
+
+th:nth-child(1),
+td:nth-child(1) {
+  width: 78px;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: 150px;
+}
+
+th:nth-child(3),
+td:nth-child(3) {
+  width: 34%;
+}
+
+th:nth-child(4),
+td:nth-child(4) {
+  width: 128px;
+}
+
+th:nth-child(5),
+td:nth-child(5) {
+  width: 124px;
+}
+
+th:nth-child(6),
+td:nth-child(6) {
+  width: 170px;
+}
+
+th:nth-child(7),
+td:nth-child(7) {
+  width: 76px;
+}
+
+th:nth-child(8),
+td:nth-child(8) {
+  width: 172px;
+}
+
+.url-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interval-cell select {
+  min-width: 106px;
+  padding-right: 28px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.verdict {
+  min-height: 34px;
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 7px 10px;
+}
+
+@media (max-width: 760px) {
+  .grid,
+  .row {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181a1b;
+    --text: #f0f2ef;
+    --muted: #a6aba4;
+    --panel: #222526;
+    --line: #3a3f3d;
+    --accent: #35a58f;
+    --accent-strong: #2b8876;
+    --danger: #f97066;
+    --danger-bg: #351716;
+  }
+}

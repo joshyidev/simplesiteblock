@@ -1,0 +1,386 @@
+import { evaluate, hydrateIndex } from "../background/engine.js";
+import { hashPassword, verifyPassword } from "../background/crypto.js";
+import {
+  addList,
+  removeList,
+  updateListNow,
+  updateListSettings,
+} from "../background/lists.js";
+import {
+  getState,
+  getStorageBytesInUse,
+  saveSettings,
+} from "../background/storage.js";
+import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
+
+const app = document.querySelector("#app");
+const lock = document.querySelector("#lock");
+const status = document.querySelector("#status");
+const lockButton = document.querySelector("#lockButton");
+
+void boot();
+
+async function boot() {
+  const state = await getState();
+  if (!isOptionsUnlocked(state.settings)) {
+    app.hidden = true;
+    lockButton.hidden = true;
+    renderLock(lock, {
+      verifyPassword,
+      settings: state.settings,
+      setStatus,
+      onUnlocked: () => void boot(),
+    });
+    return;
+  }
+
+  lock.hidden = true;
+  app.hidden = false;
+  lockButton.hidden = !state.settings.passwordEnabled;
+  renderApp(state);
+}
+
+function renderApp(state) {
+  const bytesPromise = getStorageBytesInUse();
+  const totalRules = countRules(state.compiledIndex);
+  const builtAt = state.compiledIndex?.builtAt
+    ? new Date(state.compiledIndex.builtAt).toLocaleString()
+    : "Never";
+
+  app.innerHTML = `
+    <div class="grid">
+      <section class="panel">
+        <h2>Block action</h2>
+        <div class="choice" id="blockActionChoices">
+          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show block page</label>
+          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Password</h2>
+        ${renderPassword(state.settings)}
+      </section>
+
+      <section class="panel span">
+        <h2>Lists</h2>
+        ${renderLists(state.lists)}
+        <form id="addListForm" class="row add-list-form">
+          <label class="field">
+            Name
+            <input name="name" placeholder="StevenBlack hosts">
+          </label>
+          <label class="field">
+            URL
+            <input name="url" type="url" placeholder="https://example.com/list.txt" required>
+          </label>
+          <button class="fit" type="submit">Add list</button>
+        </form>
+      </section>
+
+      <section class="panel span">
+        <h2>Diagnostics</h2>
+        <div class="row">
+          <label class="field">
+            Test URL
+            <input id="testUrl" type="text" placeholder="example.com or https://example.com">
+          </label>
+          <button id="testUrlButton" class="fit" type="button">Test</button>
+          <output id="testVerdict" class="verdict">No test run.</output>
+        </div>
+        <p class="muted" id="diagStats">Rules: ${totalRules.toLocaleString()} · Built: ${escapeHtml(builtAt)} · Storage: calculating...</p>
+      </section>
+    </div>
+  `;
+
+  bytesPromise.then((bytes) => {
+    const stats = app.querySelector("#diagStats");
+    if (stats) {
+      stats.textContent = `Rules: ${totalRules.toLocaleString()} · Built: ${builtAt} · Storage: ${formatBytes(bytes)}`;
+    }
+  });
+
+  bindEvents(state);
+}
+
+function renderPassword(settings) {
+  if (!settings.passwordEnabled) {
+    return `
+      <form id="enablePasswordForm" class="row">
+        <label class="field">
+          New password
+          <input name="password" type="password" autocomplete="new-password" required>
+        </label>
+        <label class="field">
+          Confirm
+          <input name="confirm" type="password" autocomplete="new-password" required>
+        </label>
+        <button class="fit" type="submit">Enable</button>
+      </form>
+    `;
+  }
+
+  return `
+    <form id="changePasswordForm" class="row">
+      <label class="field">
+        New password
+        <input name="password" type="password" autocomplete="new-password" required>
+      </label>
+      <label class="field">
+        Confirm
+        <input name="confirm" type="password" autocomplete="new-password" required>
+      </label>
+      <button class="fit" type="submit">Change</button>
+    </form>
+    <form id="disablePasswordForm" class="row">
+      <button class="danger fit" type="submit">Disable</button>
+    </form>
+  `;
+}
+
+function renderLists(lists) {
+  if (lists.length === 0) {
+    return `<p class="muted">No lists added.</p>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Enabled</th>
+            <th>Name</th>
+            <th>URL</th>
+            <th>Detected format</th>
+            <th>Interval</th>
+            <th>Updated</th>
+            <th>Rules</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lists.map(renderListRow).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderListRow(list) {
+  const lastUpdated = list.lastUpdatedAt
+    ? formatDateMinute(list.lastUpdatedAt)
+    : "Never";
+  const error = list.lastError
+    ? `<div class="error">${escapeHtml(list.lastError)}</div>`
+    : "";
+  return `
+    <tr data-list-id="${escapeHtml(list.id)}">
+      <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
+      <td>${escapeHtml(list.name)}</td>
+      <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
+      <td>${escapeHtml(formatListType(list))}</td>
+      <td class="interval-cell">
+        <select class="list-interval" aria-label="Update interval">
+          ${intervalOption(0, "Manual", list.updateIntervalDays)}
+          ${[1, 2, 3, 4, 5, 6, 7].map((day) => intervalOption(day, `${day} day${day === 1 ? "" : "s"}`, list.updateIntervalDays)).join("")}
+        </select>
+      </td>
+      <td>${escapeHtml(lastUpdated)}${error}</td>
+      <td>${Number(list.ruleCount || 0).toLocaleString()}</td>
+      <td class="actions">
+        <button class="update-list" type="button">Update</button>
+        <button class="remove-list ghost" type="button">Remove</button>
+      </td>
+    </tr>
+  `;
+}
+
+function intervalOption(value, label, selected) {
+  return `<option value="${value}" ${Number(selected) === value ? "selected" : ""}>${label}</option>`;
+}
+
+function bindEvents(state) {
+  app
+    .querySelector("#blockActionChoices")
+    .addEventListener("change", async (event) => {
+      if (event.target.name !== "blockAction") return;
+      await saveSettings({ blockAction: event.target.value });
+      setStatus("Block action saved.");
+    });
+
+  app
+    .querySelector("#addListForm")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      await runBusy("Adding list...", async () => {
+        await addList({
+          name: form.get("name"),
+          url: form.get("url"),
+        });
+        await boot();
+        setStatus("List added.");
+      });
+    });
+
+  for (const row of app.querySelectorAll("tr[data-list-id]")) {
+    const listId = row.dataset.listId;
+    row
+      .querySelector(".list-enabled")
+      .addEventListener("change", async (event) => {
+        await updateListSettings(listId, { enabled: event.target.checked });
+        await boot();
+        setStatus("List setting saved.");
+      });
+    row
+      .querySelector(".list-interval")
+      .addEventListener("change", async (event) => {
+        await updateListSettings(listId, {
+          updateIntervalDays: Number(event.target.value),
+        });
+        await boot();
+        setStatus("Update interval saved.");
+      });
+    row.querySelector(".update-list").addEventListener("click", async () => {
+      await runBusy("Updating list...", async () => {
+        await updateListNow(listId);
+        await boot();
+        setStatus("List updated.");
+      });
+    });
+    row.querySelector(".remove-list").addEventListener("click", async () => {
+      await removeList(listId);
+      await boot();
+      setStatus("List removed.");
+    });
+  }
+
+  const enableForm = app.querySelector("#enablePasswordForm");
+  if (enableForm) {
+    enableForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const password = form.get("password");
+      if (password !== form.get("confirm")) {
+        setStatus("Passwords do not match.");
+        return;
+      }
+      await saveSettings({
+        passwordEnabled: true,
+        passwordHash: await hashPassword(password),
+      });
+      sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
+      await boot();
+      setStatus("Password enabled.");
+    });
+  }
+
+  const changeForm = app.querySelector("#changePasswordForm");
+  if (changeForm) {
+    changeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const password = form.get("password");
+      if (password !== form.get("confirm")) {
+        setStatus("Passwords do not match.");
+        return;
+      }
+      await saveSettings({
+        passwordHash: await hashPassword(password),
+      });
+      await boot();
+      setStatus("Password changed.");
+    });
+  }
+
+  const disableForm = app.querySelector("#disablePasswordForm");
+  if (disableForm) {
+    disableForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveSettings({ passwordEnabled: false, passwordHash: null });
+      lockOptions();
+      await boot();
+      setStatus("Password disabled.");
+    });
+  }
+
+  app.querySelector("#testUrlButton").addEventListener("click", () => {
+    const input = app.querySelector("#testUrl");
+    const url = normalizeTestUrl(input.value);
+    input.value = url;
+    const verdict = evaluate(url, hydrateIndex(state.compiledIndex));
+    const output = app.querySelector("#testVerdict");
+    output.textContent = verdict.blocked
+      ? `Blocked: ${verdict.reason}`
+      : "Allowed";
+  });
+}
+
+lockButton.addEventListener("click", () => {
+  lockOptions();
+  void boot();
+});
+
+async function runBusy(message, task) {
+  setStatus(message);
+  try {
+    await task();
+  } catch (error) {
+    const message = error.message || "Something went wrong.";
+    setStatus(message);
+    window.alert(message);
+  }
+}
+
+function setStatus(message) {
+  status.textContent = message;
+}
+
+function countRules(index) {
+  return (
+    (index.hostBlocks?.length || 0) +
+    (index.hostAllows?.length || 0) +
+    (index.regexBlocks?.length || 0) +
+    (index.regexAllows?.length || 0)
+  );
+}
+
+function formatBytes(bytes) {
+  if (bytes == null) return "unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatListType(list) {
+  if (list.detectedFormat === "hosts") return "Hosts";
+  if (list.detectedFormat === "adblock") return "Adblock";
+  if (list.format === "hosts") return "Hosts";
+  if (list.format === "adblock") return "Adblock";
+  return "Detecting";
+}
+
+function formatDateMinute(timestamp) {
+  return new Date(timestamp).toLocaleString([], {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function normalizeTestUrl(value) {
+  const trimmed = value.trim();
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
