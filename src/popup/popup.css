@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f7f7f4;
+  --text: #202124;
+  --muted: #60646c;
+  --accent: #0b6b5e;
+  --accent-strong: #094d44;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 240px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.popup {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.version {
+  margin: 4px 0 14px;
+  color: var(--muted);
+}
+
+button {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181a1b;
+    --text: #f0f2ef;
+    --muted: #a6aba4;
+    --accent: #35a58f;
+    --accent-strong: #2b8876;
+  }
+}

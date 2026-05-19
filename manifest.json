@@ -20,7 +20,8 @@
   },
   "options_page": "src/options/options.html",
   "action": {
-    "default_title": "SimpleSiteBlock"
+    "default_title": "SimpleSiteBlock",
+    "default_popup": "src/popup/popup.html"
   },
   "icons": {
     "16": "icons/icon16.png",

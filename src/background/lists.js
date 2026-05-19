@@ -145,7 +145,8 @@ export async function compileAndStoreIndex() {
 
   const state = await getState();
   const parsedLists = [];
-  if (state.customRules.trim()) parsedLists.push(parseCustomRules(state.customRules));
+  if (state.customRules.trim())
+    parsedLists.push(parseCustomRules(state.customRules));
 
   const lists = state.lists.map((list) => {
     if (!list.enabled || !state.rawLists[list.id]) return list;
