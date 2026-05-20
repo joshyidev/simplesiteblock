@@ -34,7 +34,6 @@ export async function addList({ name, url }) {
     url: normalizedUrl,
     format: "auto",
     enabled: true,
-    lastUpdatedAt: 0,
     lastError: null,
     etag: null,
     lastModified: null,
@@ -119,7 +118,6 @@ export async function updateAllLists() {
     if (!result.notModified) rawLists[list.id] = result.text;
     return {
       ...list,
-      lastUpdatedAt: now,
       lastError: null,
       etag: result.etag ?? list.etag,
       lastModified: result.lastModified ?? list.lastModified,
@@ -159,7 +157,6 @@ export async function updateListNow(listId, { compile = true } = {}) {
         ? {
             ...list,
             ruleCount: countRules(parsed),
-            lastUpdatedAt: now,
             lastError: null,
             etag: result.etag ?? list.etag,
             lastModified: result.lastModified ?? list.lastModified,

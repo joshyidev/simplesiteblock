@@ -44,38 +44,24 @@ async function boot() {
 function renderApp(state) {
   const bytesPromise = getStorageBytesInUse();
   const totalRules = countRules(state.compiledIndex);
-  const builtAt = state.compiledIndex?.builtAt
-    ? new Date(state.compiledIndex.builtAt).toLocaleString()
-    : "Never";
 
   app.innerHTML = `
     <div class="grid">
-      <section class="panel">
-        <h2>Block action</h2>
-        <div class="choice" id="blockActionChoices">
-          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show block page</label>
-          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab</label>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Password</h2>
-        ${renderPassword(state.settings)}
-      </section>
-
       <section class="panel span">
         <div class="section-header">
           <h2>Lists</h2>
-          <div class="section-actions">
-            <label class="field-inline">
-              Auto-update
-              <select id="updateInterval">
-                <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
-                ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
-              </select>
-            </label>
-            <button id="updateAllButton" type="button">Update All</button>
-          </div>
+          <p class="list-summary muted" id="listsMeta"></p>
+        </div>
+        <div class="section-actions list-controls">
+          <label class="field-inline">
+            Auto-update
+            <select id="updateInterval">
+              <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
+              ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
+            </select>
+          </label>
+          <button id="updateAllButton" type="button">Update All</button>
+          <p class="list-status muted" id="listsStatus" role="status" aria-live="polite"></p>
         </div>
         ${state.pendingRebuild ? '<p class="pending-notice">Pending changes — run <strong>Update All</strong> to apply.</p>' : ""}
         ${renderLists(state.lists)}
@@ -96,14 +82,27 @@ function renderApp(state) {
         <h2>Custom rules</h2>
         <form id="customRulesForm" class="custom-rules-form">
           <label class="field">
-            Domains or Adblock rules
-            <textarea id="customRules" name="customRules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
+            <textarea id="customRules" name="customRules" aria-label="Domains or Adblock rules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
           </label>
           <p class="muted">Use one domain per line. Plain domains match exactly; ||example.com^ includes subdomains; @@ allows a match.</p>
-          <div class="form-actions">
+          <div class="form-actions custom-rules-actions">
             <button class="fit" type="submit">Save rules</button>
+            <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
           </div>
         </form>
+      </section>
+
+      <section class="panel">
+        <h2>Block action</h2>
+        <div class="choice" id="blockActionChoices">
+          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show block page</label>
+          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Password</h2>
+        ${renderPassword(state.settings)}
       </section>
 
       <section class="panel span">
@@ -116,15 +115,23 @@ function renderApp(state) {
           <button id="testUrlButton" class="fit" type="button">Test</button>
           <output id="testVerdict" class="verdict">No test run.</output>
         </div>
-        <p class="muted" id="diagStats">Rules: ${totalRules.toLocaleString()} · Built: ${escapeHtml(builtAt)} · Storage: calculating...</p>
+        <p class="muted" id="diagStats">Storage: calculating...</p>
       </section>
     </div>
   `;
 
+  const listsMeta = app.querySelector("#listsMeta");
+  if (listsMeta) {
+    const builtAt = state.compiledIndex?.builtAt
+      ? new Date(state.compiledIndex.builtAt).toLocaleString()
+      : "Never";
+    listsMeta.textContent = `${totalRules.toLocaleString()} total rules · Index built ${builtAt}`;
+  }
+
   bytesPromise.then((bytes) => {
     const stats = app.querySelector("#diagStats");
     if (stats) {
-      stats.textContent = `Rules: ${totalRules.toLocaleString()} · Built: ${builtAt} · Storage: ${formatBytes(bytes)}`;
+      stats.textContent = `Storage: ${formatBytes(bytes)}`;
     }
   });
 
@@ -179,7 +186,6 @@ function renderLists(lists) {
             <th>Enabled</th>
             <th>Name</th>
             <th>URL</th>
-            <th>Updated</th>
             <th>Rules</th>
             <th>Actions</th>
           </tr>
@@ -193,9 +199,6 @@ function renderLists(lists) {
 }
 
 function renderListRow(list) {
-  const lastUpdated = list.lastUpdatedAt
-    ? formatDateMinute(list.lastUpdatedAt)
-    : "Never";
   const error = list.lastError
     ? `<div class="error">${escapeHtml(list.lastError)}</div>`
     : "";
@@ -204,8 +207,7 @@ function renderListRow(list) {
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
       <td>${escapeHtml(list.name)}</td>
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
-      <td>${escapeHtml(lastUpdated)}${error}</td>
-      <td>${Number(list.ruleCount || 0).toLocaleString()}</td>
+      <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
       <td class="actions">
         <button class="remove-list ghost" type="button">Remove</button>
       </td>
@@ -244,11 +246,16 @@ function bindEvents(state) {
     .addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      await runBusy("Saving custom rules...", async () => {
+      setCustomRulesStatus("Saving custom rules...");
+      try {
         await updateCustomRules(form.get("customRules"));
         await boot();
-        setStatus("Custom rules saved.");
-      });
+        setCustomRulesStatus("Custom rules saved.");
+      } catch (error) {
+        const message = error.message || "Something went wrong.";
+        setCustomRulesStatus(message);
+        window.alert(message);
+      }
     });
 
   app.querySelector("#updateInterval").addEventListener("change", async (event) => {
@@ -257,11 +264,16 @@ function bindEvents(state) {
   });
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
-    await runBusy("Updating all lists...", async () => {
+    setListsStatus("Updating lists...");
+    try {
       await updateAllLists();
       await boot();
-      setStatus("All lists updated.");
-    });
+      setListsStatus("All lists updated.");
+    } catch (error) {
+      const message = error.message || "Something went wrong.";
+      setListsStatus(message);
+      window.alert(message);
+    }
   });
 
   for (const row of app.querySelectorAll("tr[data-list-id]")) {
@@ -362,6 +374,20 @@ function setStatus(message) {
   status.textContent = message;
 }
 
+function setListsStatus(message) {
+  const listsStatus = app.querySelector("#listsStatus");
+  if (listsStatus) {
+    listsStatus.textContent = message;
+  }
+}
+
+function setCustomRulesStatus(message) {
+  const customRulesStatus = app.querySelector("#customRulesStatus");
+  if (customRulesStatus) {
+    customRulesStatus.textContent = message;
+  }
+}
+
 function countRules(index) {
   return (
     (index.hostBlocksExact?.length || 0) +
@@ -378,16 +404,6 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDateMinute(timestamp) {
-  return new Date(timestamp).toLocaleString([], {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function normalizeTestUrl(value) {

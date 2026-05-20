@@ -196,6 +196,21 @@ h3 {
   margin-top: 10px;
 }
 
+.custom-rules-actions {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.custom-rules-status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.custom-rules-status:empty {
+  display: none;
+}
+
 #disablePasswordForm {
   margin-top: 12px;
 }
@@ -277,6 +292,26 @@ td:nth-child(6) {
   margin-bottom: 0;
 }
 
+.list-summary {
+  margin-bottom: 0;
+  font-size: 13px;
+  text-align: right;
+}
+
+.list-controls {
+  margin-bottom: 14px;
+  justify-content: flex-start;
+}
+
+.list-status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.list-status:empty {
+  display: none;
+}
+
 .section-actions {
   display: flex;
   align-items: center;
@@ -330,6 +365,19 @@ td:nth-child(6) {
 
   .topbar {
     align-items: flex-start;
+  }
+
+  .section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .list-summary {
+    text-align: left;
+  }
+
+  .list-controls {
+    flex-wrap: wrap;
   }
 }
 
