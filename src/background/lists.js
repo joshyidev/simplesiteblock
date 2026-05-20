@@ -41,18 +41,7 @@ export async function addList({ name, url }) {
   };
 
   await saveLists([...state.lists, list]);
-  try {
-    return await updateListNow(list.id, { compile: false });
-  } catch (error) {
-    const rollbackState = await getState();
-    const rawLists = { ...rollbackState.rawLists };
-    delete rawLists[list.id];
-    await saveLists(
-      rollbackState.lists.filter((storedList) => storedList.id !== list.id),
-    );
-    await saveRawLists(rawLists);
-    throw error;
-  }
+  await savePendingRebuild(true);
 }
 
 export function normalizeListUrl(value) {

@@ -296,17 +296,14 @@ function makeChromeMock({
   };
 }
 
-test("addList fetches content and marks pending without recompiling", async () => {
+test("addList saves list metadata and marks pending without fetching", async () => {
   const originalChrome = globalThis.chrome;
   const originalFetch = globalThis.fetch;
   const { chrome, written } = makeChromeMock();
   globalThis.chrome = chrome;
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    headers: { get: () => null },
-    text: async () => "0.0.0.0 ads.example.com\n",
-  });
+  globalThis.fetch = async () => {
+    throw new Error("addList should not fetch");
+  };
 
   try {
     await addList({ name: "Test", url: "https://example.com/list.txt" });
@@ -319,6 +316,11 @@ test("addList fetches content and marks pending without recompiling", async () =
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
     assert.ok(pendingWrite, "pendingRebuild should be set");
     assert.equal(pendingWrite.pendingRebuild, true);
+    const listWrite = written.find((w) => "lists" in w);
+    assert.ok(listWrite, "lists should have been saved");
+    assert.equal(listWrite.lists.length, 1);
+    assert.equal(listWrite.lists[0].url, "https://example.com/list.txt");
+    assert.equal(listWrite.lists[0].name, "Test");
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
