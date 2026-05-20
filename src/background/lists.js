@@ -6,17 +6,18 @@ import {
   saveCompiledIndex,
   saveCustomRules,
   saveLists,
+  savePendingRebuild,
   saveRawLists,
 } from "./storage.js";
 
-export const ALARM_PREFIX = "update:";
+export const ALARM_NAME = "update:index";
 const MAX_CONTENT_LENGTH_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
 
 let compilePromise = null;
 
-export async function addList({ name, url, updateIntervalDays = 7 }) {
+export async function addList({ name, url }) {
   const state = await getState();
   const normalizedUrl = normalizeListUrl(url);
   if (
@@ -34,7 +35,6 @@ export async function addList({ name, url, updateIntervalDays = 7 }) {
     format: "auto",
     detectedFormat: null,
     enabled: true,
-    updateIntervalDays: clampInterval(updateIntervalDays),
     lastUpdatedAt: 0,
     lastError: null,
     etag: null,
@@ -43,7 +43,6 @@ export async function addList({ name, url, updateIntervalDays = 7 }) {
   };
 
   await saveLists([...state.lists, list]);
-  await reconcileAlarms();
   try {
     return await updateListNow(list.id);
   } catch (error) {
@@ -54,7 +53,6 @@ export async function addList({ name, url, updateIntervalDays = 7 }) {
       rollbackState.lists.filter((storedList) => storedList.id !== list.id),
     );
     await saveRawLists(rawLists);
-    await reconcileAlarms();
     throw error;
   }
 }
@@ -81,26 +79,57 @@ export async function removeList(listId) {
   delete rawLists[listId];
   await saveLists(state.lists.filter((list) => list.id !== listId));
   await saveRawLists(rawLists);
-  await compileAndStoreIndex();
-  await reconcileAlarms();
+  await savePendingRebuild(true);
 }
 
 export async function updateListSettings(listId, patch) {
   const state = await getState();
   const lists = state.lists.map((list) =>
-    list.id === listId
-      ? {
-          ...list,
-          ...patch,
-          updateIntervalDays: clampInterval(
-            patch.updateIntervalDays ?? list.updateIntervalDays,
-          ),
-        }
-      : list,
+    list.id === listId ? { ...list, ...patch } : list,
   );
   await saveLists(lists);
-  if ("enabled" in patch || "format" in patch) await compileAndStoreIndex();
-  await reconcileAlarms();
+  if ("enabled" in patch || "format" in patch) await savePendingRebuild(true);
+}
+
+export async function updateAllLists() {
+  const state = await getState();
+  const enabledLists = state.lists.filter((list) => list.enabled);
+  const fetchResults = new Map();
+
+  await Promise.allSettled(
+    enabledLists.map(async (list) => {
+      try {
+        const result = await fetchList(list);
+        if (result.notModified && !state.rawLists[list.id]) {
+          throw new Error("Server returned not modified but no cached body.");
+        }
+        fetchResults.set(list.id, { ok: true, result });
+      } catch (error) {
+        fetchResults.set(list.id, { ok: false, error });
+      }
+    }),
+  );
+
+  const now = Date.now();
+  const rawLists = { ...state.rawLists };
+  const lists = state.lists.map((list) => {
+    const outcome = fetchResults.get(list.id);
+    if (!outcome) return list;
+    if (!outcome.ok) return { ...list, lastError: outcome.error.message };
+    const { result } = outcome;
+    if (!result.notModified) rawLists[list.id] = result.text;
+    return {
+      ...list,
+      lastUpdatedAt: now,
+      lastError: null,
+      etag: result.etag ?? list.etag,
+      lastModified: result.lastModified ?? list.lastModified,
+    };
+  });
+
+  await saveLists(lists);
+  await saveRawLists(rawLists);
+  await compileAndStoreIndex();
 }
 
 export async function updateCustomRules(rawRules) {
@@ -188,41 +217,25 @@ export async function compileAndStoreIndex() {
 export async function reconcileAlarms() {
   if (!chrome.alarms) return;
   const state = await getState();
-  const alarms = await chrome.alarms.getAll();
-  const existing = new Map(
-    alarms
-      .filter((alarm) => alarm.name.startsWith(ALARM_PREFIX))
-      .map((alarm) => [alarm.name, alarm]),
-  );
+  const periodInMinutes = clampInterval(state.settings.updateIntervalDays) * 1440;
+  const existing = await chrome.alarms.get(ALARM_NAME);
 
-  const desired = new Map();
-  for (const list of state.lists) {
-    if (!list.enabled || list.updateIntervalDays <= 0) continue;
-    desired.set(`${ALARM_PREFIX}${list.id}`, list.updateIntervalDays * 1440);
+  if (periodInMinutes <= 0) {
+    if (existing) await chrome.alarms.clear(ALARM_NAME);
+    return;
   }
 
-  await Promise.all(
-    [...existing.keys()]
-      .filter((name) => {
-        const want = desired.get(name);
-        return want === undefined || existing.get(name).periodInMinutes !== want;
-      })
-      .map((name) => chrome.alarms.clear(name)),
-  );
-
-  for (const [name, periodInMinutes] of desired) {
-    if (existing.get(name)?.periodInMinutes === periodInMinutes) continue;
-    chrome.alarms.create(name, { delayInMinutes: periodInMinutes, periodInMinutes });
-  }
+  if (existing?.periodInMinutes === periodInMinutes) return;
+  if (existing) await chrome.alarms.clear(ALARM_NAME);
+  chrome.alarms.create(ALARM_NAME, { delayInMinutes: periodInMinutes, periodInMinutes });
 }
 
 export async function handleAlarm(alarm) {
-  if (!alarm.name.startsWith(ALARM_PREFIX)) return;
-  const listId = alarm.name.slice(ALARM_PREFIX.length);
+  if (alarm.name !== ALARM_NAME) return;
   try {
-    await updateListNow(listId);
+    await updateAllLists();
   } catch {
-    // The list metadata already records the error; keep the worker quiet.
+    // Errors are stored per-list; keep the worker quiet.
   }
 }
 

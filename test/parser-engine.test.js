@@ -247,13 +247,14 @@ test("addList rejects duplicate list URLs before fetching", async () => {
   }
 });
 
-function makeChromeMock({ lists = [], rawLists = {}, customRules = "" } = {}) {
+function makeChromeMock({ lists = [], rawLists = {}, customRules = "", settings = {} } = {}) {
   const store = {
-    settings: {},
+    settings: { updateIntervalDays: 0, ...settings },
     lists,
     rawLists,
     customRules,
     compiledIndex: { hostBlocksExact: [], hostAllowsExact: [], hostBlocksSubtree: [], hostAllowsSubtree: [], regexBlocks: [], regexAllows: [], builtAt: 1 },
+    pendingRebuild: false,
   };
   const written = [];
   return {
@@ -272,7 +273,7 @@ function makeChromeMock({ lists = [], rawLists = {}, customRules = "" } = {}) {
         },
       },
       alarms: {
-        getAll: async () => [],
+        get: async () => undefined,
         clear: async () => {},
         create: () => {},
       },
@@ -282,10 +283,10 @@ function makeChromeMock({ lists = [], rawLists = {}, customRules = "" } = {}) {
   };
 }
 
-test("removeList removes the list and its raw content then recompiles", async () => {
+test("removeList removes the list and its raw content and marks pending", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, written } = makeChromeMock({
-    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
+    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true }],
     rawLists: { abc: "0.0.0.0 ads.example.com" },
   });
   globalThis.chrome = chrome;
@@ -298,43 +299,30 @@ test("removeList removes the list and its raw content then recompiles", async ()
     const rawWrite = written.find((w) => "rawLists" in w);
     assert.ok(rawWrite, "rawLists should have been saved");
     assert.equal("abc" in rawWrite.rawLists, false);
+    const pendingWrite = written.find((w) => "pendingRebuild" in w);
+    assert.ok(pendingWrite, "pendingRebuild should have been set");
+    assert.equal(pendingWrite.pendingRebuild, true);
     const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.ok(indexWrite, "compiledIndex should have been recompiled");
+    assert.equal(indexWrite, undefined, "compiledIndex should not be recompiled immediately");
   } finally {
     globalThis.chrome = originalChrome;
   }
 });
 
-test("updateListSettings with only updateIntervalDays does not recompile", async () => {
+test("updateListSettings with enabled change marks pending without recompiling", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, written } = makeChromeMock({
-    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
-  });
-  globalThis.chrome = chrome;
-
-  try {
-    await updateListSettings("abc", { updateIntervalDays: 3 });
-    const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.equal(indexWrite, undefined, "compiledIndex should not be recompiled for interval-only change");
-    const listWrite = written.find((w) => "lists" in w);
-    assert.ok(listWrite);
-    assert.equal(listWrite.lists[0].updateIntervalDays, 3);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("updateListSettings with enabled change recompiles", async () => {
-  const originalChrome = globalThis.chrome;
-  const { chrome, written } = makeChromeMock({
-    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
+    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true }],
   });
   globalThis.chrome = chrome;
 
   try {
     await updateListSettings("abc", { enabled: false });
+    const pendingWrite = written.find((w) => "pendingRebuild" in w);
+    assert.ok(pendingWrite, "pendingRebuild should be set");
+    assert.equal(pendingWrite.pendingRebuild, true);
     const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.ok(indexWrite, "compiledIndex should be recompiled when enabled changes");
+    assert.equal(indexWrite, undefined, "compiledIndex should not be recompiled");
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -373,29 +361,20 @@ test("updateCustomRules rejects non-Adblock text", async () => {
   }
 });
 
-test("reconcileAlarms creates alarms for enabled lists and skips already-correct ones", async () => {
+test("reconcileAlarms skips creating alarm when one with correct period exists", async () => {
   const originalChrome = globalThis.chrome;
   const created = [];
   const cleared = [];
   globalThis.chrome = {
     alarms: {
-      getAll: async () => [
-        { name: "update:existing", periodInMinutes: 7 * 1440 },
-      ],
+      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
       clear: async (name) => { cleared.push(name); },
       create: (name, opts) => { created.push({ name, opts }); },
     },
     storage: {
       local: {
         async get(defaults) {
-          return {
-            ...defaults,
-            lists: [
-              { id: "existing", enabled: true, updateIntervalDays: 7 },
-              { id: "new-list", enabled: true, updateIntervalDays: 1 },
-              { id: "disabled", enabled: false, updateIntervalDays: 7 },
-            ],
-          };
+          return { ...defaults, settings: { updateIntervalDays: 7 } };
         },
       },
     },
@@ -403,10 +382,8 @@ test("reconcileAlarms creates alarms for enabled lists and skips already-correct
 
   try {
     await reconcileAlarms();
-    assert.equal(cleared.includes("update:existing"), false, "correct existing alarm should not be cleared");
-    assert.ok(created.some((c) => c.name === "update:new-list"), "new list alarm should be created");
-    assert.equal(created.some((c) => c.name === "update:existing"), false, "existing correct alarm should not be recreated");
-    assert.equal(created.some((c) => c.name === "update:disabled"), false, "disabled list should have no alarm");
+    assert.equal(created.length, 0, "alarm should not be recreated when period matches");
+    assert.equal(cleared.length, 0, "alarm should not be cleared when period matches");
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -418,19 +395,14 @@ test("reconcileAlarms clears and recreates alarm when interval changes", async (
   const cleared = [];
   globalThis.chrome = {
     alarms: {
-      getAll: async () => [
-        { name: "update:abc", periodInMinutes: 7 * 1440 },
-      ],
+      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
       clear: async (name) => { cleared.push(name); },
       create: (name, opts) => { created.push({ name, opts }); },
     },
     storage: {
       local: {
         async get(defaults) {
-          return {
-            ...defaults,
-            lists: [{ id: "abc", enabled: true, updateIntervalDays: 1 }],
-          };
+          return { ...defaults, settings: { updateIntervalDays: 1 } };
         },
       },
     },
@@ -438,8 +410,34 @@ test("reconcileAlarms clears and recreates alarm when interval changes", async (
 
   try {
     await reconcileAlarms();
-    assert.ok(cleared.includes("update:abc"), "stale alarm should be cleared");
-    assert.ok(created.some((c) => c.name === "update:abc" && c.opts.periodInMinutes === 1440), "alarm should be recreated with new period");
+    assert.ok(cleared.includes("update:index"), "stale alarm should be cleared");
+    assert.ok(created.some((c) => c.name === "update:index" && c.opts.periodInMinutes === 1440), "alarm should be recreated with new period");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileAlarms clears alarm when interval is set to 0 (manual)", async () => {
+  const originalChrome = globalThis.chrome;
+  const cleared = [];
+  globalThis.chrome = {
+    alarms: {
+      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
+      clear: async (name) => { cleared.push(name); },
+      create: () => {},
+    },
+    storage: {
+      local: {
+        async get(defaults) {
+          return { ...defaults, settings: { updateIntervalDays: 0 } };
+        },
+      },
+    },
+  };
+
+  try {
+    await reconcileAlarms();
+    assert.ok(cleared.includes("update:index"), "alarm should be cleared for manual mode");
   } finally {
     globalThis.chrome = originalChrome;
   }

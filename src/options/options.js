@@ -3,8 +3,8 @@ import { hashPassword, verifyPassword } from "../background/crypto.js";
 import {
   addList,
   removeList,
+  updateAllLists,
   updateCustomRules,
-  updateListNow,
   updateListSettings,
 } from "../background/lists.js";
 import {
@@ -64,7 +64,20 @@ function renderApp(state) {
       </section>
 
       <section class="panel span">
-        <h2>Lists</h2>
+        <div class="section-header">
+          <h2>Lists</h2>
+          <div class="section-actions">
+            <label class="field-inline">
+              Auto-update
+              <select id="updateInterval">
+                <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
+                ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
+              </select>
+            </label>
+            <button id="updateAllButton" type="button">Update All</button>
+          </div>
+        </div>
+        ${state.pendingRebuild ? '<p class="pending-notice">Pending changes — run <strong>Update All</strong> to apply.</p>' : ""}
         ${renderLists(state.lists)}
         <form id="addListForm" class="row add-list-form">
           <label class="field">
@@ -166,7 +179,6 @@ function renderLists(lists) {
             <th>Enabled</th>
             <th>Name</th>
             <th>URL</th>
-            <th>Interval</th>
             <th>Updated</th>
             <th>Rules</th>
             <th>Actions</th>
@@ -192,24 +204,13 @@ function renderListRow(list) {
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
       <td>${escapeHtml(list.name)}</td>
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
-      <td class="interval-cell">
-        <select class="list-interval" aria-label="Update interval">
-          ${intervalOption(0, "Manual", list.updateIntervalDays)}
-          ${[1, 2, 3, 4, 5, 6, 7].map((day) => intervalOption(day, `${day} day${day === 1 ? "" : "s"}`, list.updateIntervalDays)).join("")}
-        </select>
-      </td>
       <td>${escapeHtml(lastUpdated)}${error}</td>
       <td>${Number(list.ruleCount || 0).toLocaleString()}</td>
       <td class="actions">
-        <button class="update-list" type="button">Update</button>
         <button class="remove-list ghost" type="button">Remove</button>
       </td>
     </tr>
   `;
-}
-
-function intervalOption(value, label, selected) {
-  return `<option value="${value}" ${Number(selected) === value ? "selected" : ""}>${label}</option>`;
 }
 
 function bindEvents(state) {
@@ -250,6 +251,19 @@ function bindEvents(state) {
       });
     });
 
+  app.querySelector("#updateInterval").addEventListener("change", async (event) => {
+    await saveSettings({ updateIntervalDays: Number(event.target.value) });
+    setStatus("Auto-update interval saved.");
+  });
+
+  app.querySelector("#updateAllButton").addEventListener("click", async () => {
+    await runBusy("Updating all lists...", async () => {
+      await updateAllLists();
+      await boot();
+      setStatus("All lists updated.");
+    });
+  });
+
   for (const row of app.querySelectorAll("tr[data-list-id]")) {
     const listId = row.dataset.listId;
     row
@@ -259,22 +273,6 @@ function bindEvents(state) {
         await boot();
         setStatus("List setting saved.");
       });
-    row
-      .querySelector(".list-interval")
-      .addEventListener("change", async (event) => {
-        await updateListSettings(listId, {
-          updateIntervalDays: Number(event.target.value),
-        });
-        await boot();
-        setStatus("Update interval saved.");
-      });
-    row.querySelector(".update-list").addEventListener("click", async () => {
-      await runBusy("Updating list...", async () => {
-        await updateListNow(listId);
-        await boot();
-        setStatus("List updated.");
-      });
-    });
     row.querySelector(".remove-list").addEventListener("click", async () => {
       await removeList(listId);
       await boot();

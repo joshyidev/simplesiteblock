@@ -5,6 +5,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   passwordEnabled: false,
   passwordHash: null,
   lastUnlockAt: 0,
+  updateIntervalDays: 7,
 });
 
 export async function ensureDefaults() {
@@ -32,6 +33,7 @@ export async function getState() {
     rawLists: {},
     customRules: "",
     compiledIndex: EMPTY_SERIALIZED_INDEX,
+    pendingRebuild: false,
   });
 
   return {
@@ -44,6 +46,7 @@ export async function getState() {
     customRules:
       typeof stored.customRules === "string" ? stored.customRules : "",
     compiledIndex: stored.compiledIndex || EMPTY_SERIALIZED_INDEX,
+    pendingRebuild: Boolean(stored.pendingRebuild),
   };
 }
 
@@ -75,8 +78,12 @@ export async function saveCustomRules(customRules) {
 }
 
 export async function saveCompiledIndex(compiledIndex) {
-  await chrome.storage.local.set({ compiledIndex });
+  await chrome.storage.local.set({ compiledIndex, pendingRebuild: false });
   return compiledIndex;
+}
+
+export async function savePendingRebuild(pending) {
+  await chrome.storage.local.set({ pendingRebuild: pending });
 }
 
 export async function getStorageBytesInUse() {

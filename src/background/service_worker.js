@@ -15,9 +15,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (changes.settings || changes.compiledIndex) stateReady = null;
-  if (changes.lists || changes.rawLists || changes.customRules) {
+  if (changes.settings || changes.compiledIndex || changes.lists || changes.rawLists || changes.customRules) {
     stateReady = null;
+  }
+  if (changes.settings || changes.lists || changes.rawLists || changes.customRules) {
     void reconcileAlarms();
   }
 });
