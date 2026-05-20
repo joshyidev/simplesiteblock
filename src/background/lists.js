@@ -33,7 +33,6 @@ export async function addList({ name, url }) {
     name: name?.trim() || new URL(normalizedUrl).hostname,
     url: normalizedUrl,
     format: "auto",
-    detectedFormat: null,
     enabled: true,
     lastUpdatedAt: 0,
     lastError: null,
@@ -44,7 +43,7 @@ export async function addList({ name, url }) {
 
   await saveLists([...state.lists, list]);
   try {
-    return await updateListNow(list.id);
+    return await updateListNow(list.id, { compile: false });
   } catch (error) {
     const rollbackState = await getState();
     const rawLists = { ...rollbackState.rawLists };
@@ -139,7 +138,7 @@ export async function updateCustomRules(rawRules) {
   return compileAndStoreIndex();
 }
 
-export async function updateListNow(listId) {
+export async function updateListNow(listId, { compile = true } = {}) {
   const state = await getState();
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
@@ -159,7 +158,6 @@ export async function updateListNow(listId) {
       list.id === listId
         ? {
             ...list,
-            detectedFormat: parsed.detectedFormat,
             ruleCount: countRules(parsed),
             lastUpdatedAt: now,
             lastError: null,
@@ -174,7 +172,11 @@ export async function updateListNow(listId) {
 
     await saveLists(lists);
     await saveRawLists(rawLists);
-    await compileAndStoreIndex();
+    if (compile) {
+      await compileAndStoreIndex();
+    } else {
+      await savePendingRebuild(true);
+    }
   } catch (error) {
     const lists = state.lists.map((list) =>
       list.id === listId ? { ...list, lastError: error.message } : list,
@@ -199,7 +201,6 @@ export async function compileAndStoreIndex() {
       parsedLists.push(parsed);
       return {
         ...list,
-        detectedFormat: parsed.detectedFormat,
         ruleCount: countRules(parsed),
         lastError: null,
       };
@@ -217,7 +218,8 @@ export async function compileAndStoreIndex() {
 export async function reconcileAlarms() {
   if (!chrome.alarms) return;
   const state = await getState();
-  const periodInMinutes = clampInterval(state.settings.updateIntervalDays) * 1440;
+  const periodInMinutes =
+    clampInterval(state.settings.updateIntervalDays) * 1440;
   const existing = await chrome.alarms.get(ALARM_NAME);
 
   if (periodInMinutes <= 0) {
@@ -227,7 +229,10 @@ export async function reconcileAlarms() {
 
   if (existing?.periodInMinutes === periodInMinutes) return;
   if (existing) await chrome.alarms.clear(ALARM_NAME);
-  chrome.alarms.create(ALARM_NAME, { delayInMinutes: periodInMinutes, periodInMinutes });
+  chrome.alarms.create(ALARM_NAME, {
+    delayInMinutes: periodInMinutes,
+    periodInMinutes,
+  });
 }
 
 export async function handleAlarm(alarm) {
