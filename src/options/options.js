@@ -251,15 +251,18 @@ function bindEvents(state) {
       event.preventDefault();
       const formElement = event.currentTarget;
       const form = new FormData(formElement);
-      await runBusy("Adding list...", async () => {
+      try {
         await addList({
           name: form.get("name"),
           url: form.get("url"),
         });
         formElement.reset();
         await boot();
-        setStatus("List added.");
-      });
+      } catch (error) {
+        const message = error.message || "Something went wrong.";
+        setStatus(message);
+        window.alert(message);
+      }
     });
 
   app
@@ -281,7 +284,7 @@ function bindEvents(state) {
 
   app.querySelector("#updateInterval").addEventListener("change", async (event) => {
     await saveSettings({ updateIntervalDays: Number(event.target.value) });
-    setStatus("Auto-update interval saved.");
+    setListsStatus("Auto-update interval saved.");
   });
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
@@ -304,12 +307,10 @@ function bindEvents(state) {
       .addEventListener("change", async (event) => {
         await updateListSettings(listId, { enabled: event.target.checked });
         await boot();
-        setStatus("List setting saved.");
       });
     row.querySelector(".remove-list").addEventListener("click", async () => {
       await removeList(listId);
       await boot();
-      setStatus("List removed.");
     });
   }
 
@@ -379,17 +380,6 @@ lockButton.addEventListener("click", () => {
   lockOptions();
   void boot();
 });
-
-async function runBusy(message, task) {
-  setStatus(message);
-  try {
-    await task();
-  } catch (error) {
-    const message = error.message || "Something went wrong.";
-    setStatus(message);
-    window.alert(message);
-  }
-}
 
 function setStatus(message) {
   status.textContent = message;
