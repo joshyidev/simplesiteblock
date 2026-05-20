@@ -18,6 +18,7 @@ const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
 const status = document.querySelector("#status");
 const lockButton = document.querySelector("#lockButton");
+let lastPendingRebuild = false;
 
 void boot();
 
@@ -44,6 +45,8 @@ async function boot() {
 function renderApp(state) {
   const bytesPromise = getStorageBytesInUse();
   const totalRules = countRules(state.compiledIndex);
+  const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
+  const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
 
   app.innerHTML = `
     <div class="grid">
@@ -63,7 +66,7 @@ function renderApp(state) {
           <button id="updateAllButton" type="button">Update All</button>
           <p class="list-status muted" id="listsStatus" role="status" aria-live="polite"></p>
         </div>
-        ${state.pendingRebuild ? '<p class="pending-notice">Pending changes — run <strong>Update All</strong> to apply.</p>' : ""}
+        ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
         ${renderLists(state.lists)}
         <form id="addListForm" class="row add-list-form">
           <label class="field">
@@ -136,6 +139,24 @@ function renderApp(state) {
   });
 
   bindEvents(state);
+  animatePendingNoticeOut(animatePendingOut);
+  lastPendingRebuild = state.pendingRebuild;
+}
+
+function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
+  return `
+    <p id="pendingNotice" class="pending-notice${isVisible ? " is-visible" : ""}${shouldAnimateIn ? " is-entering" : ""}" role="status" aria-live="polite" aria-hidden="${isActive ? "false" : "true"}">
+      Pending changes — run <strong>Update All</strong> to apply.
+    </p>
+  `;
+}
+
+function animatePendingNoticeOut(shouldAnimate) {
+  if (!shouldAnimate) return;
+  const notice = app.querySelector("#pendingNotice");
+  if (!notice) return;
+  notice.getBoundingClientRect();
+  notice.classList.remove("is-visible");
 }
 
 function renderPassword(settings) {
