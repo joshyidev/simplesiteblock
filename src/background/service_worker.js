@@ -13,14 +13,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   void handleAlarm(alarm);
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  void initialize();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  void initialize();
-});
-
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.settings || changes.compiledIndex) stateReady = null;

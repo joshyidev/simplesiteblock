@@ -14,7 +14,6 @@ const MAX_CONTENT_LENGTH_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
 
-let compileTimer = null;
 let compilePromise = null;
 
 export async function addList({ name, url, updateIntervalDays = 7 }) {
@@ -100,7 +99,7 @@ export async function updateListSettings(listId, patch) {
       : list,
   );
   await saveLists(lists);
-  await compileAndStoreIndex();
+  if ("enabled" in patch || "format" in patch) await compileAndStoreIndex();
   await reconcileAlarms();
 }
 
@@ -156,15 +155,6 @@ export async function updateListNow(listId) {
   }
 }
 
-export function scheduleCompile() {
-  clearTimeout(compileTimer);
-  compileTimer = setTimeout(() => {
-    compilePromise = compileAndStoreIndex().finally(() => {
-      compilePromise = null;
-    });
-  }, 500);
-}
-
 export async function compileAndStoreIndex() {
   if (compilePromise) return compilePromise;
 
@@ -185,12 +175,7 @@ export async function compileAndStoreIndex() {
         lastError: null,
       };
     } catch (error) {
-      return {
-        ...list,
-        detectedFormat: null,
-        ruleCount: 0,
-        lastError: error.message,
-      };
+      return { ...list, ruleCount: 0, lastError: error.message };
     }
   });
 
@@ -204,19 +189,30 @@ export async function reconcileAlarms() {
   if (!chrome.alarms) return;
   const state = await getState();
   const alarms = await chrome.alarms.getAll();
-  await Promise.all(
+  const existing = new Map(
     alarms
       .filter((alarm) => alarm.name.startsWith(ALARM_PREFIX))
-      .map((alarm) => chrome.alarms.clear(alarm.name)),
+      .map((alarm) => [alarm.name, alarm]),
   );
 
+  const desired = new Map();
   for (const list of state.lists) {
     if (!list.enabled || list.updateIntervalDays <= 0) continue;
-    const periodInMinutes = list.updateIntervalDays * 1440;
-    chrome.alarms.create(`${ALARM_PREFIX}${list.id}`, {
-      delayInMinutes: periodInMinutes,
-      periodInMinutes,
-    });
+    desired.set(`${ALARM_PREFIX}${list.id}`, list.updateIntervalDays * 1440);
+  }
+
+  await Promise.all(
+    [...existing.keys()]
+      .filter((name) => {
+        const want = desired.get(name);
+        return want === undefined || existing.get(name).periodInMinutes !== want;
+      })
+      .map((name) => chrome.alarms.clear(name)),
+  );
+
+  for (const [name, periodInMinutes] of desired) {
+    if (existing.get(name)?.periodInMinutes === periodInMinutes) continue;
+    chrome.alarms.create(name, { delayInMinutes: periodInMinutes, periodInMinutes });
   }
 }
 
@@ -366,7 +362,7 @@ async function fetchList(list) {
     }
 
     const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_TEXT_BYTES) {
+    if (new Blob([text]).size > MAX_TEXT_BYTES) {
       throw new Error("List is larger than the 25 MB text limit");
     }
 

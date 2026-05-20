@@ -42,6 +42,7 @@ export function normalizeHostname(value) {
   let input = value.trim().toLowerCase();
   if (!input || input.includes("/") || input.includes(":")) return null;
   input = input.replace(/\.$/, "");
+  // SKIPPED_HOSTS are known-safe strings; callers filter them out before use.
   if (!input || SKIPPED_HOSTS.has(input)) return input;
 
   let ascii;

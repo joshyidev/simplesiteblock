@@ -143,7 +143,8 @@ function compilePatternRule(pattern) {
 }
 
 function normalizeFlags(flags) {
-  const unique = new Set((flags || "").replace(/[^dgimsuvy]/g, "").split(""));
+  // Strip g and y — stateful flags cause lastIndex side effects across test() calls.
+  const unique = new Set((flags || "").replace(/[^dimsuv]/g, "").split(""));
   unique.add("i");
   return [...unique].join("");
 }

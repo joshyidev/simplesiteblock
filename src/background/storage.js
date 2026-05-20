@@ -8,15 +8,21 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export async function ensureDefaults() {
-  const state = await getState();
-  await chrome.storage.local.set({
-    settings: state.settings,
-    lists: state.lists,
-    rawLists: state.rawLists,
-    customRules: state.customRules,
-    compiledIndex: state.compiledIndex,
-  });
-  return state;
+  const stored = await chrome.storage.local.get([
+    "settings", "lists", "rawLists", "customRules", "compiledIndex",
+  ]);
+  const toWrite = {};
+  if (!stored.settings || typeof stored.settings !== "object") {
+    toWrite.settings = DEFAULT_SETTINGS;
+  } else if (Object.keys(DEFAULT_SETTINGS).some((k) => !(k in stored.settings))) {
+    toWrite.settings = { ...DEFAULT_SETTINGS, ...stored.settings };
+  }
+  if (!Array.isArray(stored.lists)) toWrite.lists = [];
+  if (!stored.rawLists || typeof stored.rawLists !== "object") toWrite.rawLists = {};
+  if (typeof stored.customRules !== "string") toWrite.customRules = "";
+  if (!stored.compiledIndex) toWrite.compiledIndex = EMPTY_SERIALIZED_INDEX;
+  if (Object.keys(toWrite).length > 0) await chrome.storage.local.set(toWrite);
+  return getState();
 }
 
 export async function getState() {

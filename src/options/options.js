@@ -331,11 +331,12 @@ function bindEvents(state) {
     });
   }
 
-  app.querySelector("#testUrlButton").addEventListener("click", () => {
+  app.querySelector("#testUrlButton").addEventListener("click", async () => {
     const input = app.querySelector("#testUrl");
     const url = normalizeTestUrl(input.value);
     input.value = url;
-    const verdict = evaluate(url, hydrateIndex(state.compiledIndex));
+    const { compiledIndex } = await getState();
+    const verdict = evaluate(url, hydrateIndex(compiledIndex));
     const output = app.querySelector("#testVerdict");
     output.textContent = verdict.blocked
       ? `Blocked: ${verdict.reason}`

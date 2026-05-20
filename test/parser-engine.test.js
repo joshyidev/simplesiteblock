@@ -10,6 +10,10 @@ import {
   normalizeListUrl,
   parseCustomRules,
   parseListText,
+  reconcileAlarms,
+  removeList,
+  updateCustomRules,
+  updateListSettings,
 } from "../src/background/lists.js";
 import { parseAdblock } from "../src/background/parser/adblock.js";
 import { parseHosts } from "../src/background/parser/hosts.js";
@@ -240,5 +244,203 @@ test("addList rejects duplicate list URLs before fetching", async () => {
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
+  }
+});
+
+function makeChromeMock({ lists = [], rawLists = {}, customRules = "" } = {}) {
+  const store = {
+    settings: {},
+    lists,
+    rawLists,
+    customRules,
+    compiledIndex: { hostBlocksExact: [], hostAllowsExact: [], hostBlocksSubtree: [], hostAllowsSubtree: [], regexBlocks: [], regexAllows: [], builtAt: 1 },
+  };
+  const written = [];
+  return {
+    chrome: {
+      storage: {
+        local: {
+          async get(keys) {
+            if (Array.isArray(keys)) return Object.fromEntries(keys.map((k) => [k, store[k]]));
+            const defaults = typeof keys === "object" ? keys : {};
+            return { ...defaults, ...store };
+          },
+          async set(patch) {
+            written.push({ ...patch });
+            Object.assign(store, patch);
+          },
+        },
+      },
+      alarms: {
+        getAll: async () => [],
+        clear: async () => {},
+        create: () => {},
+      },
+    },
+    written,
+    store,
+  };
+}
+
+test("removeList removes the list and its raw content then recompiles", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock({
+    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
+    rawLists: { abc: "0.0.0.0 ads.example.com" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await removeList("abc");
+    const listWrite = written.find((w) => "lists" in w);
+    assert.ok(listWrite, "lists should have been saved");
+    assert.equal(listWrite.lists.length, 0);
+    const rawWrite = written.find((w) => "rawLists" in w);
+    assert.ok(rawWrite, "rawLists should have been saved");
+    assert.equal("abc" in rawWrite.rawLists, false);
+    const indexWrite = written.find((w) => "compiledIndex" in w);
+    assert.ok(indexWrite, "compiledIndex should have been recompiled");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateListSettings with only updateIntervalDays does not recompile", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock({
+    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await updateListSettings("abc", { updateIntervalDays: 3 });
+    const indexWrite = written.find((w) => "compiledIndex" in w);
+    assert.equal(indexWrite, undefined, "compiledIndex should not be recompiled for interval-only change");
+    const listWrite = written.find((w) => "lists" in w);
+    assert.ok(listWrite);
+    assert.equal(listWrite.lists[0].updateIntervalDays, 3);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateListSettings with enabled change recompiles", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock({
+    lists: [{ id: "abc", name: "Test", url: "https://example.com/l.txt", enabled: true, updateIntervalDays: 7 }],
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await updateListSettings("abc", { enabled: false });
+    const indexWrite = written.find((w) => "compiledIndex" in w);
+    assert.ok(indexWrite, "compiledIndex should be recompiled when enabled changes");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateCustomRules validates and saves rules", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock();
+  globalThis.chrome = chrome;
+
+  try {
+    await updateCustomRules("example.com\n||ads.example.net^");
+    const rulesWrite = written.find((w) => "customRules" in w);
+    assert.ok(rulesWrite, "customRules should have been saved");
+    assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
+    const indexWrite = written.find((w) => "compiledIndex" in w);
+    assert.ok(indexWrite, "compiledIndex should have been recompiled");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateCustomRules rejects non-Adblock text", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock();
+  globalThis.chrome = chrome;
+
+  try {
+    await assert.rejects(
+      () => updateCustomRules("hello world\nnot a filter"),
+      /valid Adblock/,
+    );
+    assert.equal(written.length, 0, "storage should not be written on invalid rules");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileAlarms creates alarms for enabled lists and skips already-correct ones", async () => {
+  const originalChrome = globalThis.chrome;
+  const created = [];
+  const cleared = [];
+  globalThis.chrome = {
+    alarms: {
+      getAll: async () => [
+        { name: "update:existing", periodInMinutes: 7 * 1440 },
+      ],
+      clear: async (name) => { cleared.push(name); },
+      create: (name, opts) => { created.push({ name, opts }); },
+    },
+    storage: {
+      local: {
+        async get(defaults) {
+          return {
+            ...defaults,
+            lists: [
+              { id: "existing", enabled: true, updateIntervalDays: 7 },
+              { id: "new-list", enabled: true, updateIntervalDays: 1 },
+              { id: "disabled", enabled: false, updateIntervalDays: 7 },
+            ],
+          };
+        },
+      },
+    },
+  };
+
+  try {
+    await reconcileAlarms();
+    assert.equal(cleared.includes("update:existing"), false, "correct existing alarm should not be cleared");
+    assert.ok(created.some((c) => c.name === "update:new-list"), "new list alarm should be created");
+    assert.equal(created.some((c) => c.name === "update:existing"), false, "existing correct alarm should not be recreated");
+    assert.equal(created.some((c) => c.name === "update:disabled"), false, "disabled list should have no alarm");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileAlarms clears and recreates alarm when interval changes", async () => {
+  const originalChrome = globalThis.chrome;
+  const created = [];
+  const cleared = [];
+  globalThis.chrome = {
+    alarms: {
+      getAll: async () => [
+        { name: "update:abc", periodInMinutes: 7 * 1440 },
+      ],
+      clear: async (name) => { cleared.push(name); },
+      create: (name, opts) => { created.push({ name, opts }); },
+    },
+    storage: {
+      local: {
+        async get(defaults) {
+          return {
+            ...defaults,
+            lists: [{ id: "abc", enabled: true, updateIntervalDays: 1 }],
+          };
+        },
+      },
+    },
+  };
+
+  try {
+    await reconcileAlarms();
+    assert.ok(cleared.includes("update:abc"), "stale alarm should be cleared");
+    assert.ok(created.some((c) => c.name === "update:abc" && c.opts.periodInMinutes === 1440), "alarm should be recreated with new period");
+  } finally {
+    globalThis.chrome = originalChrome;
   }
 });
