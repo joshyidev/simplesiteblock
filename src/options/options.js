@@ -166,7 +166,6 @@ function renderLists(lists) {
             <th>Enabled</th>
             <th>Name</th>
             <th>URL</th>
-            <th>Detected format</th>
             <th>Interval</th>
             <th>Updated</th>
             <th>Rules</th>
@@ -193,7 +192,6 @@ function renderListRow(list) {
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
       <td>${escapeHtml(list.name)}</td>
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
-      <td>${escapeHtml(formatListType(list))}</td>
       <td class="interval-cell">
         <select class="list-interval" aria-label="Update interval">
           ${intervalOption(0, "Manual", list.updateIntervalDays)}
@@ -227,12 +225,14 @@ function bindEvents(state) {
     .querySelector("#addListForm")
     .addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       await runBusy("Adding list...", async () => {
         await addList({
           name: form.get("name"),
           url: form.get("url"),
         });
+        formElement.reset();
         await boot();
         setStatus("List added.");
       });
@@ -379,14 +379,6 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatListType(list) {
-  if (list.detectedFormat === "hosts") return "Hosts";
-  if (list.detectedFormat === "adblock") return "Adblock";
-  if (list.format === "hosts") return "Hosts";
-  if (list.format === "adblock") return "Adblock";
-  return "Detecting";
 }
 
 function formatDateMinute(timestamp) {
