@@ -12,7 +12,7 @@
 }
 
 body {
-  width: 240px;
+  width: 260px;
   margin: 0;
   background: var(--bg);
   color: var(--text);
@@ -23,15 +23,30 @@ body {
   padding: 16px;
 }
 
-h1 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.2;
+.popup-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.version {
-  margin: 4px 0 14px;
+.popup-icon {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+}
+
+.popup-name {
+  margin: 0 0 2px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.popup-version {
+  margin: 0;
   color: var(--muted);
+  font-size: 13px;
 }
 
 button {

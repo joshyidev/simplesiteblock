@@ -225,9 +225,10 @@ The options page renders these areas:
 - Lists.
 - Custom rules.
 - Block action.
-- Import / Export.
 - Password.
+- Import / Export.
 - Diagnostics.
+- About.
 
 The page reads state with `getState()` and re-renders after mutations.
 
@@ -256,8 +257,12 @@ Import / Export:
 - Exports block action, auto-update interval, list metadata, and custom rules.
 - Omits derived data such as `compiledIndex` and raw list bodies.
 - Includes password settings only when the user checks the export option.
-- Imports validate settings, lists, custom rules, and any included raw list bodies before replacing current storage.
-- Imports without raw bodies mark `pendingRebuild` when enabled lists need to be downloaded.
+- Imports validate settings, lists, and custom rules before replacing current storage.
+- Imports ignore raw list bodies if present, rebuild from imported custom rules, and mark `pendingRebuild` when enabled lists need to be downloaded.
+
+About:
+
+- Shows the extension icon plus the name and version from `runtime.getManifest()`.
 
 ## Password Lock
 
@@ -275,7 +280,7 @@ It uses:
 The lock is a soft UI gate:
 
 - It protects the options UI from casual access.
-- It does not prevent someone with Chrome profile access from clearing extension storage or disabling/uninstalling the extension.
+- It does not prevent someone with browser profile access from clearing extension storage or disabling/uninstalling the extension.
 - Unlock state lives in `sessionStorage`, so it is scoped to that options page tab.
 
 Once the options page is unlocked:
@@ -297,13 +302,13 @@ There is intentionally no unblock button or options button on this page.
 
 ## Extension Popup
 
-The browser-action popup is:
+The extension action popup is:
 
 - [src/popup/popup.html](src/popup/popup.html)
 - [src/popup/popup.css](src/popup/popup.css)
 - [src/popup/popup.js](src/popup/popup.js)
 
-It reads the extension name and version from `runtime.getManifest()` and provides an `Open options` button.
+It shows the extension icon, reads the extension name and version from `runtime.getManifest()`, and provides an `Open options` button.
 
 ## Tests
 
@@ -314,6 +319,7 @@ Current test files:
 - [test/parser-engine.test.js](test/parser-engine.test.js)
 - [test/backup.test.js](test/backup.test.js)
 - [test/crypto.test.js](test/crypto.test.js)
+- [test/extension-api.test.js](test/extension-api.test.js)
 
 They cover:
 
@@ -327,6 +333,7 @@ They cover:
 - List lifecycle behavior, pending rebuilds, alarm reconciliation, and conditional fetch edge cases.
 - Settings import/export validation.
 - Password hashing and verification.
+- Browser-vs-Chrome extension API selection.
 
 Run tests with:
 

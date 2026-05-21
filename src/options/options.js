@@ -20,7 +20,7 @@ import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
 const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
-const lockButton = document.querySelector("#lockButton");
+const shell = document.querySelector(".shell");
 const manifest = ext.runtime.getManifest();
 let lastPendingRebuild = false;
 
@@ -29,8 +29,8 @@ void boot();
 async function boot() {
   const state = await getState();
   if (!isOptionsUnlocked(state.settings)) {
+    shell.classList.add("is-locked");
     app.hidden = true;
-    lockButton.hidden = true;
     renderLock(lock, {
       verifyPassword,
       settings: state.settings,
@@ -39,9 +39,9 @@ async function boot() {
     return;
   }
 
+  shell.classList.remove("is-locked");
   lock.hidden = true;
   app.hidden = false;
-  lockButton.hidden = !state.settings.passwordEnabled;
   renderApp(state);
 }
 
@@ -107,11 +107,14 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <div class="section-header">
+        <div class="section-header password-header">
           <h2>Password</h2>
           <div class="section-header-actions">
             <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
-            <form id="disablePasswordForm"${state.settings.passwordEnabled ? "" : ' style="visibility:hidden"'}><button class="danger fit" type="submit">Disable</button></form>
+            ${state.settings.passwordEnabled ? `
+              <button id="lockButton" class="ghost fit" type="button">Lock</button>
+              <form id="disablePasswordForm"><button class="danger fit" type="submit">Disable</button></form>
+            ` : ""}
           </div>
         </div>
         <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
@@ -147,19 +150,14 @@ function renderApp(state) {
         <output id="testVerdict" class="verdict">No test run.</output>
       </section>
 
-      <section class="panel">
-        <h2>About</h2>
-        <p class="muted section-desc">${escapeHtml(manifest.description || "Block sites from hosts-file and Adblock-syntax lists.")}</p>
-        <dl class="about-list">
+      <section class="panel about-panel" aria-label="About ${escapeHtml(manifest.name)}">
+        <div class="about-summary">
+          <img class="about-icon" src="../../icons/icon256.png" alt="" width="64" height="64">
           <div>
-            <dt>Name</dt>
-            <dd>${escapeHtml(manifest.name)}</dd>
+            <p class="about-name">${escapeHtml(manifest.name)}</p>
+            <p class="about-version muted">Version ${escapeHtml(manifest.version)}</p>
           </div>
-          <div>
-            <dt>Version</dt>
-            <dd>${escapeHtml(manifest.version)}</dd>
-          </div>
-        </dl>
+        </div>
       </section>
     </div>
   `;
@@ -205,7 +203,7 @@ function renderPassword(settings) {
           Confirm
           <input name="confirm" type="password" autocomplete="new-password" required>
         </label>
-        <button class="fit" type="submit">Enable</button>
+        <button class="fit password-submit" type="submit">Enable</button>
       </form>
     `;
   }
@@ -220,7 +218,7 @@ function renderPassword(settings) {
         Confirm
         <input name="confirm" type="password" autocomplete="new-password" required>
       </label>
-      <button class="fit" type="submit">Change</button>
+      <button class="fit password-submit" type="submit">Change</button>
     </form>
   `;
 }
@@ -399,6 +397,14 @@ function bindEvents(state) {
     });
   }
 
+  const lockButton = app.querySelector("#lockButton");
+  if (lockButton) {
+    lockButton.addEventListener("click", () => {
+      lockOptions();
+      void boot();
+    });
+  }
+
   app.querySelector("#exportSettingsButton").addEventListener("click", () => {
     const includePassword = app.querySelector("#includePasswordExport").checked;
     const text = createSettingsExport(state, { includePassword });
@@ -462,11 +468,6 @@ function bindEvents(state) {
     output.classList.toggle("is-allowed", !verdict.blocked);
   });
 }
-
-lockButton.addEventListener("click", () => {
-  lockOptions();
-  void boot();
-});
 
 function setListsStatus(message) {
   const listsStatus = app.querySelector("#listsStatus");

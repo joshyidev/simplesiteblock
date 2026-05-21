@@ -27,7 +27,7 @@ dependencies unless the task explicitly calls for it.
 - `src/options/`: options UI, lock UI, list management, diagnostics.
 - `src/popup/`: extension action popup.
 - `src/blocked/`: blocked-page UI.
-- `test/`: Node tests for pure modules and mocked Chrome APIs.
+- `test/`: Node tests for pure modules and mocked browser extension APIs.
 
 ## Commands
 
@@ -37,16 +37,24 @@ Run all tests:
 npm test
 ```
 
-Build and load the Chrome extension manually:
+Build the browser extensions manually:
 
 ```sh
-npm run build:chrome
+npm run build
 ```
+
+Load the Chrome extension manually:
 
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose Load unpacked.
 4. Select `dist/chrome`.
+
+Load the Firefox extension manually:
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Choose Load Temporary Add-on.
+3. Select `dist/firefox/manifest.json`.
 
 ## Development Notes
 
@@ -73,7 +81,7 @@ npm run build:chrome
 - Run `npm test` before handing off code changes.
 - Add or update tests for parser behavior, matching behavior, storage migrations,
   alarm reconciliation, and list lifecycle changes.
-- Mock extension APIs narrowly in tests; keep mocks close to the behavior being
+- Mock browser extension APIs narrowly in tests; keep mocks close to the behavior being
   asserted.
 - For UI-only changes, inspect the options page manually by loading the unpacked
   extension when feasible.

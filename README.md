@@ -1,4 +1,8 @@
-# SimpleSiteBlock
+<p align="center">
+  <img src="icons/icon256.png" alt="" width="128" height="128">
+</p>
+
+<h1 align="center">SimpleSiteBlock</h1>
 
 SimpleSiteBlock is a Manifest V3 browser extension that blocks top-level navigations using hosts-file and a practical subset of Adblock Plus filter lists.
 

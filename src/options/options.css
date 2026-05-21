@@ -91,12 +91,11 @@ textarea {
   padding: 28px 0 40px;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
+.shell.is-locked {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 0;
 }
 
 h1,
@@ -230,6 +229,10 @@ h3 {
   display: none;
 }
 
+.password-submit {
+  width: 76px;
+}
+
 .lock-status {
   margin: 12px 0 0;
   font-size: 13px;
@@ -237,6 +240,11 @@ h3 {
 
 .lock-status:empty {
   display: none;
+}
+
+.lock-panel {
+  width: min(480px, 100%);
+  margin: 0;
 }
 
 table {
@@ -305,6 +313,7 @@ td:nth-child(6) {
 }
 
 .section-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -320,6 +329,12 @@ td:nth-child(6) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.password-header .section-header-actions {
+  position: absolute;
+  top: -3px;
+  right: 0;
 }
 
 .list-summary {
@@ -373,25 +388,31 @@ td:nth-child(6) {
   flex-shrink: 0;
 }
 
-.about-list {
-  display: grid;
-  gap: 8px;
+.about-panel {
+  padding: 16px 18px;
+}
+
+.about-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.about-icon {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+}
+
+.about-name {
+  margin: 0 0 2px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.about-version {
   margin: 0;
-}
-
-.about-list div {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 10px;
-}
-
-.about-list dt {
-  color: var(--muted);
-  font-weight: 650;
-}
-
-.about-list dd {
-  margin: 0;
+  font-size: 13px;
 }
 
 .field-inline {
@@ -477,7 +498,6 @@ td:nth-child(6) {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent-strong);
 }
-
 @media (max-width: 760px) {
   .grid,
   .row {
@@ -486,13 +506,13 @@ td:nth-child(6) {
     align-items: stretch;
   }
 
-  .topbar {
-    align-items: flex-start;
-  }
-
   .section-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .password-header .section-header-actions {
+    position: static;
   }
 
   .list-summary {
