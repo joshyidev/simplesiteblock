@@ -13,7 +13,6 @@ import {
 } from "../background/lists.js";
 import {
   getState,
-  getStorageBytesInUse,
   saveSettings,
 } from "../background/storage.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
@@ -45,7 +44,6 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const bytesPromise = getStorageBytesInUse();
   const totalRules = countRules(state.compiledIndex);
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
@@ -99,32 +97,40 @@ function renderApp(state) {
 
       <section class="panel">
         <h2>Block action</h2>
+        <p class="muted section-desc">Action to take when blocking conditions are met.</p>
         <div class="choice" id="blockActionChoices">
-          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show block page</label>
-          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab</label>
+          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show blocked page</label>
+          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab immediately</label>
         </div>
-      </section>
-
-      <section class="panel">
-        <h2>Password</h2>
-        ${renderPassword(state.settings)}
-        <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
       </section>
 
       <section class="panel">
         <h2>Import / Export</h2>
         <div class="backup-actions">
+          <p class="muted section-desc">Saves and restores lists, custom rules, and settings.</p>
           <label class="checkline">
             <input id="includePasswordExport" type="checkbox">
-            Include password lock
+            Include password settings when exporting
           </label>
           <div class="section-actions">
             <button id="exportSettingsButton" type="button">Export</button>
             <button id="importSettingsButton" class="ghost" type="button">Import</button>
             <input id="settingsImportFile" type="file" accept=".txt,.json,application/json,text/plain" hidden>
+            <p class="backup-status muted" id="backupStatus" role="status" aria-live="polite"></p>
           </div>
-          <p class="backup-status muted" id="backupStatus" role="status" aria-live="polite"></p>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <h2>Password</h2>
+          <div class="section-header-actions">
+            <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+            <form id="disablePasswordForm"${state.settings.passwordEnabled ? "" : ' style="visibility:hidden"'}><button class="danger fit" type="submit">Disable</button></form>
+          </div>
+        </div>
+        <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
+        ${renderPassword(state.settings)}
       </section>
 
       <section class="panel">
@@ -137,7 +143,6 @@ function renderApp(state) {
           <button id="testUrlButton" class="fit" type="button">Test</button>
         </div>
         <output id="testVerdict" class="verdict">No test run.</output>
-        <p class="muted" id="diagStats">Storage: calculating...</p>
       </section>
     </div>
   `;
@@ -149,13 +154,6 @@ function renderApp(state) {
       : "Never";
     listsMeta.textContent = `${totalRules.toLocaleString()} total rules · Index built ${builtAt}`;
   }
-
-  bytesPromise.then((bytes) => {
-    const stats = app.querySelector("#diagStats");
-    if (stats) {
-      stats.textContent = `Storage: ${formatBytes(bytes)}`;
-    }
-  });
 
   bindEvents(state);
   animatePendingNoticeOut(animatePendingOut);
@@ -206,9 +204,6 @@ function renderPassword(settings) {
         <input name="confirm" type="password" autocomplete="new-password" required>
       </label>
       <button class="fit" type="submit">Change</button>
-    </form>
-    <form id="disablePasswordForm" class="row">
-      <button class="danger fit" type="submit">Disable</button>
     </form>
   `;
 }
@@ -300,10 +295,12 @@ function bindEvents(state) {
       }
     });
 
-  app.querySelector("#updateInterval").addEventListener("change", async (event) => {
-    await saveSettings({ updateIntervalDays: Number(event.target.value) });
-    setListsStatus("Auto-update interval saved.");
-  });
+  app
+    .querySelector("#updateInterval")
+    .addEventListener("change", async (event) => {
+      await saveSettings({ updateIntervalDays: Number(event.target.value) });
+      setListsStatus("Auto-update interval saved.");
+    });
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
     setListsStatus("Updating lists...");
@@ -438,6 +435,8 @@ function bindEvents(state) {
     output.textContent = verdict.blocked
       ? `Blocked: ${verdict.reason}`
       : "Allowed";
+    output.classList.toggle("is-blocked", verdict.blocked);
+    output.classList.toggle("is-allowed", !verdict.blocked);
   });
 }
 
@@ -488,13 +487,6 @@ function countRules(index) {
     (index.regexBlocks?.length || 0) +
     (index.regexAllows?.length || 0)
   );
-}
-
-function formatBytes(bytes) {
-  if (bytes == null) return "unknown";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function normalizeTestUrl(value) {
