@@ -11,7 +11,7 @@ export function lockOptions() {
 
 export function renderLock(
   container,
-  { verifyPassword, settings, onUnlocked, setStatus },
+  { verifyPassword, settings, onUnlocked },
 ) {
   container.hidden = false;
   container.innerHTML = `
@@ -23,6 +23,7 @@ export function renderLock(
       </label>
       <button class="fit" type="submit">Unlock</button>
     </form>
+    <p class="lock-status muted" id="lockStatus" role="status" aria-live="polite"></p>
   `;
 
   container
@@ -32,7 +33,7 @@ export function renderLock(
       const password = container.querySelector("#unlockPassword").value;
       const ok = await verifyPassword(password, settings.passwordHash);
       if (!ok) {
-        setStatus("Incorrect password.");
+        container.querySelector("#lockStatus").textContent = "Incorrect password.";
         return;
       }
       sessionStorage.setItem("simpleSiteBlockUnlocked", "true");

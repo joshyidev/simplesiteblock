@@ -86,7 +86,9 @@ export async function updateAllLists() {
   await Promise.allSettled(
     enabledLists.map(async (list) => {
       try {
-        const result = await fetchList(list);
+        const result = await fetchList(list, {
+          hasCachedBody: Boolean(state.rawLists[list.id]),
+        });
         if (result.notModified && !state.rawLists[list.id]) {
           throw new Error("Server returned not modified but no cached body.");
         }
@@ -131,7 +133,9 @@ export async function updateListNow(listId, { compile = true } = {}) {
   if (!target) throw new Error("List not found");
 
   try {
-    const result = await fetchList(target);
+    const result = await fetchList(target, {
+      hasCachedBody: Boolean(state.rawLists[listId]),
+    });
     if (result.notModified && !state.rawLists[listId]) {
       throw new Error(
         "The server returned not modified, but no cached list body is available.",
@@ -331,13 +335,15 @@ function looksLikeHtmlDocument(text) {
   );
 }
 
-async function fetchList(list) {
+async function fetchList(list, { hasCachedBody = false } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const headers = {};
-    if (list.etag) headers["If-None-Match"] = list.etag;
-    if (list.lastModified) headers["If-Modified-Since"] = list.lastModified;
+    if (hasCachedBody && list.etag) headers["If-None-Match"] = list.etag;
+    if (hasCachedBody && list.lastModified) {
+      headers["If-Modified-Since"] = list.lastModified;
+    }
 
     const response = await fetch(list.url, {
       headers,

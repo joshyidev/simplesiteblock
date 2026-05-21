@@ -20,7 +20,6 @@ import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
 const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
-const status = document.querySelector("#status");
 const lockButton = document.querySelector("#lockButton");
 let lastPendingRebuild = false;
 
@@ -34,7 +33,6 @@ async function boot() {
     renderLock(lock, {
       verifyPassword,
       settings: state.settings,
-      setStatus,
       onUnlocked: () => void boot(),
     });
     return;
@@ -110,6 +108,7 @@ function renderApp(state) {
       <section class="panel">
         <h2>Password</h2>
         ${renderPassword(state.settings)}
+        <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
       </section>
 
       <section class="panel">
@@ -262,7 +261,6 @@ function bindEvents(state) {
     .addEventListener("change", async (event) => {
       if (event.target.name !== "blockAction") return;
       await saveSettings({ blockAction: event.target.value });
-      setStatus("Block action saved.");
     });
 
   app
@@ -280,7 +278,7 @@ function bindEvents(state) {
         await boot();
       } catch (error) {
         const message = error.message || "Something went wrong.";
-        setStatus(message);
+        setListsStatus(message);
         window.alert(message);
       }
     });
@@ -341,7 +339,7 @@ function bindEvents(state) {
       const form = new FormData(event.currentTarget);
       const password = form.get("password");
       if (password !== form.get("confirm")) {
-        setStatus("Passwords do not match.");
+        setPasswordStatus("Passwords do not match.");
         return;
       }
       await saveSettings({
@@ -350,7 +348,7 @@ function bindEvents(state) {
       });
       sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       await boot();
-      setStatus("Password enabled.");
+      setPasswordStatus("Password enabled.");
     });
   }
 
@@ -361,14 +359,14 @@ function bindEvents(state) {
       const form = new FormData(event.currentTarget);
       const password = form.get("password");
       if (password !== form.get("confirm")) {
-        setStatus("Passwords do not match.");
+        setPasswordStatus("Passwords do not match.");
         return;
       }
       await saveSettings({
         passwordHash: await hashPassword(password),
       });
       await boot();
-      setStatus("Password changed.");
+      setPasswordStatus("Password changed.");
     });
   }
 
@@ -379,7 +377,7 @@ function bindEvents(state) {
       await saveSettings({ passwordEnabled: false, passwordHash: null });
       lockOptions();
       await boot();
-      setStatus("Password disabled.");
+      setPasswordStatus("Password disabled.");
     });
   }
 
@@ -422,7 +420,7 @@ function bindEvents(state) {
         lockOptions();
       }
       await boot();
-      setStatus("Settings imported.");
+      setBackupStatus("Settings imported.");
     } catch (error) {
       const message = error.message || "Settings import failed.";
       setBackupStatus(message);
@@ -448,10 +446,6 @@ lockButton.addEventListener("click", () => {
   void boot();
 });
 
-function setStatus(message) {
-  status.textContent = message;
-}
-
 function setListsStatus(message) {
   const listsStatus = app.querySelector("#listsStatus");
   if (listsStatus) {
@@ -470,6 +464,13 @@ function setBackupStatus(message) {
   const backupStatus = app.querySelector("#backupStatus");
   if (backupStatus) {
     backupStatus.textContent = message;
+  }
+}
+
+function setPasswordStatus(message) {
+  const passwordStatus = app.querySelector("#passwordStatus");
+  if (passwordStatus) {
+    passwordStatus.textContent = message;
   }
 }
 

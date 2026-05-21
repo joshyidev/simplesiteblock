@@ -108,12 +108,6 @@ h3 {
   font-size: 15px;
 }
 
-#status {
-  min-height: 20px;
-  margin-bottom: 0;
-  color: var(--muted);
-}
-
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -213,6 +207,24 @@ h3 {
 
 #disablePasswordForm {
   margin-top: 12px;
+}
+
+.password-status {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.password-status:empty {
+  display: none;
+}
+
+.lock-status {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.lock-status:empty {
+  display: none;
 }
 
 table {

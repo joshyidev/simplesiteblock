@@ -12,6 +12,7 @@ import {
   parseListText,
   reconcileAlarms,
   removeList,
+  updateAllLists,
   updateCustomRules,
   updateListSettings,
 } from "../src/background/lists.js";
@@ -321,6 +322,54 @@ test("addList saves list metadata and marks pending without fetching", async () 
     assert.equal(listWrite.lists.length, 1);
     assert.equal(listWrite.lists[0].url, "https://example.com/list.txt");
     assert.equal(listWrite.lists[0].name, "Test");
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("updateAllLists fetches full body when validators exist without cached body", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+        etag: "\"old\"",
+        lastModified: "Wed, 01 Jan 2025 00:00:00 GMT",
+        lastError: null,
+        ruleCount: 0,
+      },
+    ],
+    rawLists: {},
+  });
+  let requestHeaders = null;
+  globalThis.chrome = chrome;
+  globalThis.fetch = async (_url, options) => {
+    requestHeaders = options.headers;
+    if (requestHeaders["If-None-Match"] || requestHeaders["If-Modified-Since"]) {
+      return new Response("", { status: 304 });
+    }
+    return new Response("0.0.0.0 ads.example.com", {
+      headers: {
+        ETag: "\"fresh\"",
+        "Last-Modified": "Thu, 02 Jan 2025 00:00:00 GMT",
+        "Content-Type": "text/plain",
+      },
+    });
+  };
+
+  try {
+    await updateAllLists();
+    assert.equal(requestHeaders["If-None-Match"], undefined);
+    assert.equal(requestHeaders["If-Modified-Since"], undefined);
+    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example.com");
+    assert.equal(store.lists[0].etag, "\"fresh\"");
+    assert.equal(store.lists[0].lastError, null);
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
