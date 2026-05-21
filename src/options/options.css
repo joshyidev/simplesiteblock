@@ -504,25 +504,8 @@ td:nth-child(6) {
   }
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #181a1b;
-  --text: #f0f2ef;
-  --muted: #a6aba4;
-  --panel: #222526;
-  --line: #3a3f3d;
-  --accent: #35a58f;
-  --accent-strong: #2b8876;
-  --danger: #f97066;
-  --danger-bg: #351716;
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
+  :root {
     --bg: #181a1b;
     --text: #f0f2ef;
     --muted: #a6aba4;

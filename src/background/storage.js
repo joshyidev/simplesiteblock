@@ -5,7 +5,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   passwordEnabled: false,
   passwordHash: null,
   lastUnlockAt: 0,
-  theme: "system",
   updateIntervalDays: 7,
 });
 

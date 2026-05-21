@@ -50,24 +50,11 @@ button:hover {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
+  :root {
     --bg: #181a1b;
     --text: #f0f2ef;
     --muted: #a6aba4;
     --accent: #35a58f;
     --accent-strong: #2b8876;
   }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #181a1b;
-  --text: #f0f2ef;
-  --muted: #a6aba4;
-  --accent: #35a58f;
-  --accent-strong: #2b8876;
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
 }

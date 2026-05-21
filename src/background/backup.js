@@ -10,7 +10,6 @@ const EXPORT_APP = "SimpleSiteBlock";
 const EXPORT_VERSION = 1;
 const BLOCK_ACTIONS = new Set(["show_block_page", "close_tab"]);
 const LIST_FORMATS = new Set(["auto", "hosts", "adblock"]);
-const THEMES = new Set(["system", "light", "dark"]);
 
 export function createSettingsExport(state, { includePassword = false } = {}) {
   const lists = sanitizeLists(state.lists || []);
@@ -79,9 +78,6 @@ function exportSettings(settings) {
     blockAction: validBlockAction(settings.blockAction)
       ? settings.blockAction
       : DEFAULT_SETTINGS.blockAction,
-    theme: validTheme(settings.theme)
-      ? settings.theme
-      : DEFAULT_SETTINGS.theme,
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
@@ -98,9 +94,6 @@ function importSettings(settings, password) {
   if (!validUpdateInterval(settings.updateIntervalDays)) {
     throw new Error("Auto-update interval setting is invalid.");
   }
-  if (settings.theme !== undefined && !validTheme(settings.theme)) {
-    throw new Error("Theme setting is invalid.");
-  }
 
   const passwordSettings =
     password === undefined
@@ -110,7 +103,6 @@ function importSettings(settings, password) {
   return {
     ...DEFAULT_SETTINGS,
     blockAction: settings.blockAction,
-    theme: settings.theme || DEFAULT_SETTINGS.theme,
     updateIntervalDays: settings.updateIntervalDays,
     ...passwordSettings,
     lastUnlockAt: 0,
@@ -190,10 +182,6 @@ function validBlockAction(value) {
 
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
-}
-
-function validTheme(value) {
-  return THEMES.has(value);
 }
 
 function validRuleCount(value) {

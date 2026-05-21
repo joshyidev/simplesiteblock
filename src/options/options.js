@@ -15,11 +15,6 @@ import {
   getState,
   saveSettings,
 } from "../background/storage.js";
-import {
-  applyTheme,
-  saveAndApplyTheme,
-  watchThemeChanges,
-} from "../theme.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
 const app = document.querySelector("#app");
@@ -28,15 +23,10 @@ const lockButton = document.querySelector("#lockButton");
 const manifest = chrome.runtime.getManifest();
 let lastPendingRebuild = false;
 
-watchThemeChanges((theme) => {
-  const input = app.querySelector(`input[name="theme"][value="${theme}"]`);
-  if (input) input.checked = true;
-});
 void boot();
 
 async function boot() {
   const state = await getState();
-  applyTheme(state.settings.theme);
   if (!isOptionsUnlocked(state.settings)) {
     app.hidden = true;
     lockButton.hidden = true;
@@ -125,16 +115,6 @@ function renderApp(state) {
         </div>
         <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
         ${renderPassword(state.settings)}
-      </section>
-
-      <section class="panel">
-        <h2>Appearance</h2>
-        <p class="muted section-desc">Theme used by options, popup, and blocked pages.</p>
-        <div class="choice" id="themeChoices">
-          ${renderThemeChoice("system", "System", state.settings.theme)}
-          ${renderThemeChoice("light", "Light", state.settings.theme)}
-          ${renderThemeChoice("dark", "Dark", state.settings.theme)}
-        </div>
       </section>
 
       <section class="panel">
@@ -244,11 +224,6 @@ function renderPassword(settings) {
   `;
 }
 
-function renderThemeChoice(value, label, theme) {
-  const checked = (theme || "system") === value ? "checked" : "";
-  return `<label><input type="radio" name="theme" value="${value}" ${checked}> ${label}</label>`;
-}
-
 function renderLists(lists) {
   if (lists.length === 0) {
     return `<p class="muted">No lists added.</p>`;
@@ -297,13 +272,6 @@ function bindEvents(state) {
     .addEventListener("change", async (event) => {
       if (event.target.name !== "blockAction") return;
       await saveSettings({ blockAction: event.target.value });
-    });
-
-  app
-    .querySelector("#themeChoices")
-    .addEventListener("change", async (event) => {
-      if (event.target.name !== "theme") return;
-      await saveAndApplyTheme(event.target.value);
     });
 
   app
