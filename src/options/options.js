@@ -1,6 +1,10 @@
 import { evaluate, hydrateIndex } from "../background/engine.js";
 import { hashPassword, verifyPassword } from "../background/crypto.js";
 import {
+  createSettingsExport,
+  importSettingsBackup,
+} from "../background/backup.js";
+import {
   addList,
   removeList,
   updateAllLists,
@@ -108,7 +112,23 @@ function renderApp(state) {
         ${renderPassword(state.settings)}
       </section>
 
-      <section class="panel span">
+      <section class="panel">
+        <h2>Import / Export</h2>
+        <div class="backup-actions">
+          <label class="checkline">
+            <input id="includePasswordExport" type="checkbox">
+            Include password lock
+          </label>
+          <div class="section-actions">
+            <button id="exportSettingsButton" type="button">Export</button>
+            <button id="importSettingsButton" class="ghost" type="button">Import</button>
+            <input id="settingsImportFile" type="file" accept=".txt,.json,application/json,text/plain" hidden>
+          </div>
+          <p class="backup-status muted" id="backupStatus" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Diagnostics</h2>
         <div class="row">
           <label class="field">
@@ -116,8 +136,8 @@ function renderApp(state) {
             <input id="testUrl" type="text" placeholder="example.com or https://example.com">
           </label>
           <button id="testUrlButton" class="fit" type="button">Test</button>
-          <output id="testVerdict" class="verdict">No test run.</output>
         </div>
+        <output id="testVerdict" class="verdict">No test run.</output>
         <p class="muted" id="diagStats">Storage: calculating...</p>
       </section>
     </div>
@@ -363,6 +383,53 @@ function bindEvents(state) {
     });
   }
 
+  app.querySelector("#exportSettingsButton").addEventListener("click", () => {
+    const includePassword = app.querySelector("#includePasswordExport").checked;
+    const text = createSettingsExport(state, { includePassword });
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = exportFileName();
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    setBackupStatus("Settings exported.");
+  });
+
+  const importFile = app.querySelector("#settingsImportFile");
+  app.querySelector("#importSettingsButton").addEventListener("click", () => {
+    importFile.click();
+  });
+  importFile.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (
+      !window.confirm(
+        "Importing settings will replace current lists, rules, and options. Continue?",
+      )
+    ) {
+      return;
+    }
+
+    setBackupStatus("Importing settings...");
+    try {
+      await importSettingsBackup(await file.text());
+      const nextState = await getState();
+      if (nextState.settings.passwordEnabled) {
+        sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
+      } else {
+        lockOptions();
+      }
+      await boot();
+      setStatus("Settings imported.");
+    } catch (error) {
+      const message = error.message || "Settings import failed.";
+      setBackupStatus(message);
+      window.alert(message);
+    }
+  });
+
   app.querySelector("#testUrlButton").addEventListener("click", async () => {
     const input = app.querySelector("#testUrl");
     const url = normalizeTestUrl(input.value);
@@ -397,6 +464,18 @@ function setCustomRulesStatus(message) {
   if (customRulesStatus) {
     customRulesStatus.textContent = message;
   }
+}
+
+function setBackupStatus(message) {
+  const backupStatus = app.querySelector("#backupStatus");
+  if (backupStatus) {
+    backupStatus.textContent = message;
+  }
+}
+
+function exportFileName() {
+  const date = new Date().toISOString().slice(0, 10);
+  return `simplesiteblock-settings-${date}.txt`;
 }
 
 function countRules(index) {

@@ -312,6 +312,21 @@ td:nth-child(6) {
   display: none;
 }
 
+.backup-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.backup-status {
+  min-height: 20px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.backup-status:empty {
+  display: none;
+}
+
 .section-actions {
   display: flex;
   align-items: center;
@@ -385,6 +400,8 @@ td:nth-child(6) {
 }
 
 .verdict {
+  display: block;
+  margin-top: 10px;
   min-height: 34px;
   border-radius: 6px;
   background: var(--bg);
