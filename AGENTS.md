@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-SimpleSiteBlock is a Manifest V3 Chrome extension. It blocks top-level HTTP(S)
+SimpleSiteBlock is a Manifest V3 browser extension. It blocks top-level HTTP(S)
 navigations using hosts-file lists, a supported subset of Adblock syntax, and
 custom rules entered on the options page.
 
@@ -14,13 +14,13 @@ dependencies unless the task explicitly calls for it.
 
 ## Key Paths
 
-- `manifest.json`: extension entry points and Chrome permissions.
+- `manifest/chrome.json` and `manifest/firefox.json`: extension entry points and permissions.
 - `src/background/service_worker.js`: navigation handling, state cache, alarms.
 - `src/background/engine.js`: pure matching, hydration, serialization.
 - `src/background/lists.js`: list fetching, validation, parsing, compilation,
   update scheduling, and pending rebuild state.
-- `src/background/storage.js`: typed defaults and wrappers around
-  `chrome.storage.local`.
+- `src/background/storage.js`: typed defaults and wrappers around extension
+  local storage.
 - `src/background/crypto.js`: password hashing and verification for the options lock.
 - `src/background/parser/hosts.js`: hosts-file parser.
 - `src/background/parser/adblock.js`: supported Adblock parser.
@@ -37,17 +37,21 @@ Run all tests:
 npm test
 ```
 
-Load the extension manually:
+Build and load the Chrome extension manually:
+
+```sh
+npm run build:chrome
+```
 
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose Load unpacked.
-4. Select this repository folder.
+4. Select `dist/chrome`.
 
 ## Development Notes
 
 - Prefer small, direct ES module changes. Keep code browser-native.
-- Use `chrome.storage.local` through `src/background/storage.js` helpers.
+- Use extension local storage through `src/background/storage.js` helpers.
 - Parser and engine code should remain pure where practical and covered by
   `node --test`.
 - The background worker caches hydrated state in memory. Storage changes should
@@ -69,7 +73,7 @@ Load the extension manually:
 - Run `npm test` before handing off code changes.
 - Add or update tests for parser behavior, matching behavior, storage migrations,
   alarm reconciliation, and list lifecycle changes.
-- Mock Chrome APIs narrowly in tests; keep mocks close to the behavior being
+- Mock extension APIs narrowly in tests; keep mocks close to the behavior being
   asserted.
 - For UI-only changes, inspect the options page manually by loading the unpacked
   extension when feasible.
@@ -92,4 +96,4 @@ Load the extension manually:
   consistent with the UI?
 - Do alarms avoid duplicate or stale schedules after upgrades?
 - Are parser changes covered by tests for valid, invalid, and skipped input?
-- Are extension permission changes reflected in `manifest.json` and justified?
+- Are extension permission changes reflected in both browser manifests and justified?

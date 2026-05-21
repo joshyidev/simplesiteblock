@@ -5,6 +5,7 @@ import {
   reconcileAlarms,
 } from "./lists.js";
 import { DEFAULT_SETTINGS, savePendingRebuild } from "./storage.js";
+import { extensionApi as ext } from "../extension_api.js";
 
 const EXPORT_APP = "SimpleSiteBlock";
 const EXPORT_VERSION = 1;
@@ -62,7 +63,7 @@ export function parseSettingsImport(text) {
 
 export async function importSettingsBackup(text) {
   const imported = parseSettingsImport(text);
-  await chrome.storage.local.set({
+  await ext.storage.local.set({
     settings: imported.settings,
     lists: imported.lists,
     rawLists: imported.rawLists,

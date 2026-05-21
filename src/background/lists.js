@@ -1,4 +1,5 @@
 import { createCombinedIndex } from "./engine.js";
+import { extensionApi as ext } from "../extension_api.js";
 import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
 import {
@@ -206,20 +207,20 @@ export async function compileAndStoreIndex() {
 }
 
 export async function reconcileAlarms() {
-  if (!chrome.alarms) return;
+  if (!ext.alarms) return;
   const state = await getState();
   const periodInMinutes =
     clampInterval(state.settings.updateIntervalDays) * 1440;
-  const existing = await chrome.alarms.get(ALARM_NAME);
+  const existing = await ext.alarms.get(ALARM_NAME);
 
   if (periodInMinutes <= 0) {
-    if (existing) await chrome.alarms.clear(ALARM_NAME);
+    if (existing) await ext.alarms.clear(ALARM_NAME);
     return;
   }
 
   if (existing?.periodInMinutes === periodInMinutes) return;
-  if (existing) await chrome.alarms.clear(ALARM_NAME);
-  chrome.alarms.create(ALARM_NAME, {
+  if (existing) await ext.alarms.clear(ALARM_NAME);
+  ext.alarms.create(ALARM_NAME, {
     delayInMinutes: periodInMinutes,
     periodInMinutes,
   });

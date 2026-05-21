@@ -1,22 +1,23 @@
 # SimpleSiteBlock
 
-SimpleSiteBlock is a Manifest V3 Chrome extension for blocking top-level navigations using hosts-file lists, a supported subset of Adblock syntax, and user-entered custom rules.
+SimpleSiteBlock is a Manifest V3 browser extension for blocking top-level navigations using hosts-file lists, a supported subset of Adblock syntax, and user-entered custom rules.
 
 The code is plain ES modules with no bundler. The extension has four main surfaces:
 
-- A background service worker that evaluates navigations and schedules list updates.
+- A background worker that evaluates navigations and schedules list updates.
 - An options page for settings, list management, custom rules, import/export, password lock, and diagnostics.
 - A blocked page shown when the global action is set to show a block page.
 - A small action popup shown when the extension icon is clicked.
 
 ## Manifest
 
-[manifest.json](manifest.json) declares the extension entry points and permissions.
+[manifest/chrome.json](manifest/chrome.json) and [manifest/firefox.json](manifest/firefox.json) declare browser-specific extension entry points and shared permissions.
 
 Important entries:
 
-- `background.service_worker`: [src/background/service_worker.js](src/background/service_worker.js)
-- `options_page`: [src/options/options.html](src/options/options.html)
+- Chrome `background.service_worker`: [src/background/service_worker.js](src/background/service_worker.js)
+- Firefox `background.scripts`: [src/background/service_worker.js](src/background/service_worker.js)
+- Chrome `options_page`, Firefox `options_ui.page`: [src/options/options.html](src/options/options.html)
 - `action.default_popup`: [src/popup/popup.html](src/popup/popup.html)
 - permissions:
   - `webNavigation`: observe top-level navigations.
@@ -32,7 +33,7 @@ Blocking is implemented through `webNavigation` plus the JavaScript matcher.
 
 ## Storage Model
 
-[src/background/storage.js](src/background/storage.js) wraps `chrome.storage.local`.
+[src/background/storage.js](src/background/storage.js) wraps extension local storage.
 
 The persisted state is:
 
@@ -77,9 +78,9 @@ The persisted state is:
 
 ## Blocking Flow
 
-The background service worker is [src/background/service_worker.js](src/background/service_worker.js).
+The background worker is [src/background/service_worker.js](src/background/service_worker.js).
 
-1. `chrome.webNavigation.onBeforeNavigate` fires.
+1. `webNavigation.onBeforeNavigate` fires.
 2. The listener ignores subframes and non-tab navigations.
 3. `handleNavigation()` loads the hydrated state.
 4. [src/background/engine.js](src/background/engine.js) evaluates the URL.
@@ -197,7 +198,7 @@ Important functions:
 - `compileAndStoreIndex()`
   - Parses enabled lists and custom rules.
   - Merges them into one compiled index.
-  - Stores it in `chrome.storage.local`.
+  - Stores it in extension local storage.
 - `reconcileAlarms()`
   - Reconciles the single global `update:index` alarm.
   - Uses `settings.updateIntervalDays`; `0` disables scheduled updates.
@@ -302,7 +303,7 @@ The browser-action popup is:
 - [src/popup/popup.css](src/popup/popup.css)
 - [src/popup/popup.js](src/popup/popup.js)
 
-It reads the extension name and version from `chrome.runtime.getManifest()` and provides an `Open options` button.
+It reads the extension name and version from `runtime.getManifest()` and provides an `Open options` button.
 
 ## Tests
 

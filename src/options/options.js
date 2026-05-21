@@ -15,12 +15,13 @@ import {
   getState,
   saveSettings,
 } from "../background/storage.js";
+import { extensionApi as ext } from "../extension_api.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
 const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
 const lockButton = document.querySelector("#lockButton");
-const manifest = chrome.runtime.getManifest();
+const manifest = ext.runtime.getManifest();
 let lastPendingRebuild = false;
 
 void boot();

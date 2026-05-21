@@ -1,4 +1,5 @@
 import { EMPTY_SERIALIZED_INDEX, hydrateIndex } from "./engine.js";
+import { extensionApi as ext } from "../extension_api.js";
 
 export const DEFAULT_SETTINGS = Object.freeze({
   blockAction: "show_block_page",
@@ -9,7 +10,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export async function ensureDefaults() {
-  const stored = await chrome.storage.local.get([
+  const stored = await ext.storage.local.get([
     "settings", "lists", "rawLists", "customRules", "compiledIndex",
   ]);
   const toWrite = {};
@@ -22,12 +23,12 @@ export async function ensureDefaults() {
   if (!stored.rawLists || typeof stored.rawLists !== "object") toWrite.rawLists = {};
   if (typeof stored.customRules !== "string") toWrite.customRules = "";
   if (!stored.compiledIndex) toWrite.compiledIndex = EMPTY_SERIALIZED_INDEX;
-  if (Object.keys(toWrite).length > 0) await chrome.storage.local.set(toWrite);
+  if (Object.keys(toWrite).length > 0) await ext.storage.local.set(toWrite);
   return getState();
 }
 
 export async function getState() {
-  const stored = await chrome.storage.local.get({
+  const stored = await ext.storage.local.get({
     settings: DEFAULT_SETTINGS,
     lists: [],
     rawLists: {},
@@ -58,35 +59,35 @@ export async function getHydratedState() {
 export async function saveSettings(settingsPatch) {
   const state = await getState();
   const settings = { ...state.settings, ...settingsPatch };
-  await chrome.storage.local.set({ settings });
+  await ext.storage.local.set({ settings });
   return settings;
 }
 
 export async function saveLists(lists) {
-  await chrome.storage.local.set({ lists });
+  await ext.storage.local.set({ lists });
   return lists;
 }
 
 export async function saveRawLists(rawLists) {
-  await chrome.storage.local.set({ rawLists });
+  await ext.storage.local.set({ rawLists });
   return rawLists;
 }
 
 export async function saveCustomRules(customRules) {
-  await chrome.storage.local.set({ customRules });
+  await ext.storage.local.set({ customRules });
   return customRules;
 }
 
 export async function saveCompiledIndex(compiledIndex) {
-  await chrome.storage.local.set({ compiledIndex, pendingRebuild: false });
+  await ext.storage.local.set({ compiledIndex, pendingRebuild: false });
   return compiledIndex;
 }
 
 export async function savePendingRebuild(pending) {
-  await chrome.storage.local.set({ pendingRebuild: pending });
+  await ext.storage.local.set({ pendingRebuild: pending });
 }
 
 export async function getStorageBytesInUse() {
-  if (!chrome.storage.local.getBytesInUse) return null;
-  return chrome.storage.local.getBytesInUse(null);
+  if (!ext.storage.local.getBytesInUse) return null;
+  return ext.storage.local.getBytesInUse(null);
 }

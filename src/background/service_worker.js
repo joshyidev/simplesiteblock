@@ -1,19 +1,20 @@
 import { evaluate } from "./engine.js";
+import { extensionApi as ext } from "../extension_api.js";
 import { ensureDefaults, getHydratedState } from "./storage.js";
 import { compileAndStoreIndex, handleAlarm, reconcileAlarms } from "./lists.js";
 
 let stateReady = null;
 
-chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+ext.webNavigation.onBeforeNavigate.addListener((details) => {
   if (details.frameId !== 0 || details.tabId < 0) return;
   void handleNavigation(details);
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
+ext.alarms.onAlarm.addListener((alarm) => {
   void handleAlarm(alarm);
 });
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
+ext.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.settings || changes.compiledIndex || changes.lists || changes.rawLists || changes.customRules) {
     stateReady = null;
@@ -46,19 +47,19 @@ async function handleNavigation(details) {
     state.settings.blockAction === "close_tab" ||
     (await isIncognitoTab(details.tabId))
   ) {
-    chrome.tabs.remove(details.tabId).catch(() => {});
+    ext.tabs.remove(details.tabId).catch(() => {});
     return;
   }
 
-  const target = chrome.runtime.getURL(
+  const target = ext.runtime.getURL(
     `src/blocked/blocked.html?url=${encodeURIComponent(details.url)}&reason=${encodeURIComponent(verdict.reason)}`,
   );
-  chrome.tabs.update(details.tabId, { url: target }).catch(() => {});
+  ext.tabs.update(details.tabId, { url: target }).catch(() => {});
 }
 
 async function isIncognitoTab(tabId) {
   try {
-    const tab = await chrome.tabs.get(tabId);
+    const tab = await ext.tabs.get(tabId);
     return Boolean(tab.incognito);
   } catch {
     return false;
