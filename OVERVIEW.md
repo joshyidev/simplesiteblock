@@ -1,11 +1,11 @@
 # SimpleSiteBlock
 
-SimpleSiteBlock is a Manifest V3 Chrome extension for blocking top-level navigations using hosts-file lists, a supported subset of Adblock syntax, and user-entered custom Adblock rules.
+SimpleSiteBlock is a Manifest V3 Chrome extension for blocking top-level navigations using hosts-file lists, a supported subset of Adblock syntax, and user-entered custom rules.
 
 The code is plain ES modules with no bundler. The extension has four main surfaces:
 
 - A background service worker that evaluates navigations and schedules list updates.
-- An options page for settings, list management, custom rules, password lock, and diagnostics.
+- An options page for settings, list management, custom rules, import/export, password lock, and diagnostics.
 - A blocked page shown when the global action is set to show a block page.
 - A small action popup shown when the extension icon is clicked.
 
@@ -42,9 +42,20 @@ The persisted state is:
     blockAction: "show_block_page" | "close_tab",
     passwordEnabled: boolean,
     passwordHash: null | { algo, salt, iterations, hash },
-    lastUnlockAt: number
+    lastUnlockAt: number,
+    updateIntervalDays: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
   },
-  lists: [/* list metadata */],
+  lists: [{
+    id: string,
+    name: string,
+    url: string,
+    format: "auto" | "hosts" | "adblock",
+    enabled: boolean,
+    lastError: null | string,
+    etag: null | string,
+    lastModified: null | string,
+    ruleCount: number
+  }],
   rawLists: { [listId]: "raw list text" },
   customRules: "raw custom Adblock rules",
   compiledIndex: {
@@ -55,11 +66,14 @@ The persisted state is:
     regexBlocks: { source, flags }[],
     regexAllows: { source, flags }[],
     builtAt: number
-  }
+  },
+  pendingRebuild: boolean
 }
 ```
 
 `getState()` returns defaults for missing keys. `getHydratedState()` additionally turns `compiledIndex` into runtime objects: `Set` for host rules and `RegExp` instances for regex rules.
+
+`compiledIndex` is the blocking source of truth. `pendingRebuild` means list metadata or raw-list availability changed and the compiled index may not reflect those changes until an update/rebuild path runs.
 
 ## Blocking Flow
 
@@ -153,23 +167,29 @@ The parser returns host block/allow sets and regex block/allow records.
 
 Important functions:
 
-- `addList({ name, url, updateIntervalDays })`
-  - Creates metadata.
-  - Fetches the URL immediately.
-  - Rolls back the list if fetch or validation fails.
+- `addList({ name, url })`
+  - Normalizes and deduplicates the URL.
+  - Creates metadata with `format: "auto"` and `enabled: true`.
+  - Does not fetch immediately.
+  - Marks `pendingRebuild` so the UI can prompt for `Update All`.
+- `updateAllLists()`
+  - Fetches all enabled lists.
+  - Stores per-list fetch errors in `lastError`.
+  - Stores fresh raw text, validators, and metadata for successful fetches.
+  - Recompiles the combined index after fetches settle.
 - `updateListNow(listId)`
   - Fetches a list.
-  - Sends conditional headers when `etag` or `lastModified` are available.
+  - Sends conditional headers only when `etag`/`lastModified` and a cached raw body are available.
   - Rejects HTML responses and oversized responses.
   - Parses and validates the body.
   - Stores raw text and metadata.
-  - Recompiles the combined index.
+  - Recompiles the combined index by default, or marks `pendingRebuild` when called with `compile: false`.
 - `updateListSettings(listId, patch)`
-  - Changes enabled/update settings.
-  - Recompiles and reconciles alarms.
+  - Changes list settings.
+  - Marks `pendingRebuild` when `enabled` or `format` changes.
 - `removeList(listId)`
   - Deletes metadata and raw text.
-  - Recompiles and reconciles alarms.
+  - Marks `pendingRebuild`.
 - `updateCustomRules(rawRules)`
   - Validates custom Adblock rules.
   - Stores them.
@@ -179,8 +199,10 @@ Important functions:
   - Merges them into one compiled index.
   - Stores it in `chrome.storage.local`.
 - `reconcileAlarms()`
-  - Clears existing `update:<listId>` alarms.
-  - Recreates alarms for enabled lists with an update interval.
+  - Reconciles the single global `update:index` alarm.
+  - Uses `settings.updateIntervalDays`; `0` disables scheduled updates.
+
+List fetches keep `etag` and `lastModified` validators. Conditional headers are intentionally skipped when the raw cached body is missing, because a `304 Not Modified` response is only useful when the extension has a body to reuse.
 
 Auto format detection:
 
@@ -197,12 +219,13 @@ The options UI is:
 - [src/options/options.js](src/options/options.js)
 - [src/options/lock.js](src/options/lock.js)
 
-The options page renders four full-width/half-width areas:
+The options page renders these areas:
 
-- Block action.
-- Password.
 - Lists.
 - Custom rules.
+- Block action.
+- Import / Export.
+- Password.
 - Diagnostics.
 
 The page reads state with `getState()` and re-renders after mutations.
@@ -212,8 +235,9 @@ List controls:
 - Add list by name and URL.
 - Toggle enabled state.
 - Change update interval.
-- Update now.
+- Update all enabled lists.
 - Remove.
+- See a pending-rebuild notice when list changes have not yet been compiled into the index.
 
 Custom rules:
 
@@ -222,9 +246,17 @@ Custom rules:
 
 Diagnostics:
 
-- Shows total compiled rules, build time, and storage usage.
+- Shows total compiled rules and build time in the Lists header.
 - A test URL input runs `evaluate()` against the compiled index.
 - Bare domains are normalized to `https://...` before testing.
+
+Import / Export:
+
+- Exports block action, auto-update interval, list metadata, and custom rules.
+- Omits derived data such as `compiledIndex` and raw list bodies.
+- Includes password settings only when the user checks the export option.
+- Imports validate settings, lists, custom rules, and any included raw list bodies before replacing current storage.
+- Imports without raw bodies mark `pendingRebuild` when enabled lists need to be downloaded.
 
 ## Password Lock
 
@@ -274,9 +306,15 @@ It reads the extension name and version from `chrome.runtime.getManifest()` and 
 
 ## Tests
 
-[test/parser-engine.test.js](test/parser-engine.test.js) uses Node's built-in test runner.
+Tests use Node's built-in test runner.
 
-It covers:
+Current test files:
+
+- [test/parser-engine.test.js](test/parser-engine.test.js)
+- [test/backup.test.js](test/backup.test.js)
+- [test/crypto.test.js](test/crypto.test.js)
+
+They cover:
 
 - Hosts parsing.
 - Adblock parsing.
@@ -285,6 +323,9 @@ It covers:
 - Auto detection for hosts vs. Adblock.
 - Rejection of ordinary web pages and non-list text.
 - Custom rules parsing and validation.
+- List lifecycle behavior, pending rebuilds, alarm reconciliation, and conditional fetch edge cases.
+- Settings import/export validation.
+- Password hashing and verification.
 
 Run tests with:
 
@@ -301,6 +342,7 @@ Use these files as starting points:
 - Support more hosts syntax: `parser/hosts.js` and tests.
 - Support more Adblock syntax: `parser/adblock.js` and tests.
 - Change list update behavior: `lists.js`.
+- Change import/export behavior: `backup.js` and tests.
 - Change the options UI: `options.js` and `options.css`.
 - Change blocked-page content: `src/blocked/*`.
 - Change popup content: `src/popup/*`.
