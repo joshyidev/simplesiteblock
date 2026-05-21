@@ -33,7 +33,8 @@ export function renderLock(
       const password = container.querySelector("#unlockPassword").value;
       const ok = await verifyPassword(password, settings.passwordHash);
       if (!ok) {
-        container.querySelector("#lockStatus").textContent = "Incorrect password.";
+        container.querySelector("#lockStatus").textContent =
+          "Incorrect password.";
         return;
       }
       sessionStorage.setItem("simpleSiteBlockUnlocked", "true");

@@ -167,8 +167,7 @@ function sanitizeLists(lists) {
       url,
       format,
       enabled: list.enabled !== false,
-      lastError:
-        typeof list.lastError === "string" ? list.lastError : null,
+      lastError: typeof list.lastError === "string" ? list.lastError : null,
       etag: typeof list.etag === "string" ? list.etag : null,
       lastModified:
         typeof list.lastModified === "string" ? list.lastModified : null,

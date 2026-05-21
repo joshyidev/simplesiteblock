@@ -11,16 +11,23 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
 export async function ensureDefaults() {
   const stored = await ext.storage.local.get([
-    "settings", "lists", "rawLists", "customRules", "compiledIndex",
+    "settings",
+    "lists",
+    "rawLists",
+    "customRules",
+    "compiledIndex",
   ]);
   const toWrite = {};
   if (!stored.settings || typeof stored.settings !== "object") {
     toWrite.settings = DEFAULT_SETTINGS;
-  } else if (Object.keys(DEFAULT_SETTINGS).some((k) => !(k in stored.settings))) {
+  } else if (
+    Object.keys(DEFAULT_SETTINGS).some((k) => !(k in stored.settings))
+  ) {
     toWrite.settings = { ...DEFAULT_SETTINGS, ...stored.settings };
   }
   if (!Array.isArray(stored.lists)) toWrite.lists = [];
-  if (!stored.rawLists || typeof stored.rawLists !== "object") toWrite.rawLists = {};
+  if (!stored.rawLists || typeof stored.rawLists !== "object")
+    toWrite.rawLists = {};
   if (typeof stored.customRules !== "string") toWrite.customRules = "";
   if (!stored.compiledIndex) toWrite.compiledIndex = EMPTY_SERIALIZED_INDEX;
   if (Object.keys(toWrite).length > 0) await ext.storage.local.set(toWrite);

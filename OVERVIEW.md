@@ -316,10 +316,12 @@ Tests use Node's built-in test runner.
 
 Current test files:
 
-- [test/parser-engine.test.js](test/parser-engine.test.js)
 - [test/backup.test.js](test/backup.test.js)
 - [test/crypto.test.js](test/crypto.test.js)
+- [test/engine.test.js](test/engine.test.js)
 - [test/extension-api.test.js](test/extension-api.test.js)
+- [test/lists.test.js](test/lists.test.js)
+- [test/parser.test.js](test/parser.test.js)
 
 They cover:
 

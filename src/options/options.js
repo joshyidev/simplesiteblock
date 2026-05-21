@@ -11,10 +11,7 @@ import {
   updateCustomRules,
   updateListSettings,
 } from "../background/lists.js";
-import {
-  getState,
-  saveSettings,
-} from "../background/storage.js";
+import { getState, saveSettings } from "../background/storage.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
@@ -111,10 +108,14 @@ function renderApp(state) {
           <h2>Password</h2>
           <div class="section-header-actions">
             <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
-            ${state.settings.passwordEnabled ? `
+            ${
+              state.settings.passwordEnabled
+                ? `
               <button id="lockButton" class="ghost fit" type="button">Lock</button>
               <form id="disablePasswordForm"><button class="danger fit" type="submit">Disable</button></form>
-            ` : ""}
+            `
+                : ""
+            }
           </div>
         </div>
         <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>

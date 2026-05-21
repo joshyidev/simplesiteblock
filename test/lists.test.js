@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  evaluate,
-  hydrateIndex,
-  serializeIndex,
-} from "../src/background/engine.js";
+import { evaluate, hydrateIndex, serializeIndex } from "../src/background/engine.js";
 import {
   addList,
   normalizeListUrl,
@@ -16,118 +12,6 @@ import {
   updateCustomRules,
   updateListSettings,
 } from "../src/background/lists.js";
-import { parseAdblock } from "../src/background/parser/adblock.js";
-import { parseHosts } from "../src/background/parser/hosts.js";
-
-test("hosts parser normalizes hosts, skips comments and local aliases", () => {
-  const parsed = parseHosts(`
-    # comment
-    0.0.0.0 Example.COM localhost
-    127.0.0.1 café.example.
-    192.168.1.1 router.local
-    bad_host
-  `);
-
-  assert.equal(parsed.hosts.has("example.com"), true);
-  assert.equal(parsed.hosts.has("xn--caf-dma.example"), true);
-  assert.equal(parsed.hosts.has("localhost"), false);
-  assert.equal(parsed.hosts.has("bad_host"), false);
-  assert.equal(parsed.mappingLineCount, 2);
-});
-
-test("adblock parser supports host blocks, host allows, regexes, and cosmetic skips", () => {
-  const parsed = parseAdblock(`
-    ! comment
-    ||ads.example.com^
-    @@||allowed.example.com^$third-party
-    |https://cdn.example.com/ads/*
-    /tracker\\d+\\.js/
-    example.net/banner
-    example.com##.ad
-    /[/
-  `);
-
-  assert.equal(parsed.hostBlocksSubtree.has("ads.example.com"), true);
-  assert.equal(parsed.hostAllowsSubtree.has("allowed.example.com"), true);
-  assert.equal(parsed.regexBlocks.length, 3);
-  assert.equal(parsed.warnings.length >= 2, true);
-});
-
-test("adblock parser supports bare domain lines and hash comments", () => {
-  const parsed = parseAdblock(`
-    # comment
-    example.com
-    example.org
-    example.net # inline comment
-    *.example.test
-    example.com##.ad
-  `);
-
-  assert.equal(parsed.hostBlocksExact.has("example.com"), true);
-  assert.equal(parsed.hostBlocksExact.has("example.org"), true);
-  assert.equal(parsed.hostBlocksExact.has("example.net"), true);
-  assert.equal(parsed.regexBlocks.length, 1);
-  assert.equal(parsed.warnings.length, 1);
-});
-
-test("engine applies allow rules before block rules", () => {
-  const index = hydrateIndex({
-    hostBlocksSubtree: ["example.com"],
-    hostAllowsSubtree: ["safe.example.com"],
-    regexBlocks: [{ source: "ads", flags: "i" }],
-    regexAllows: [{ source: "allowed-path", flags: "i" }],
-    builtAt: 1,
-  });
-
-  assert.equal(evaluate("https://www.example.com/page", index).blocked, true);
-  assert.equal(evaluate("https://safe.example.com/page", index).blocked, false);
-  assert.equal(evaluate("https://other.test/ads.js", index).blocked, true);
-  assert.equal(
-    evaluate("https://other.test/allowed-path/ads.js", index).blocked,
-    false,
-  );
-  assert.equal(evaluate("chrome://extensions", index).blocked, false);
-});
-
-test("engine treats exact host rules differently from subtree host rules", () => {
-  const exact = hydrateIndex({
-    hostBlocksExact: ["example.com"],
-    regexBlocks: [],
-    regexAllows: [],
-    builtAt: 1,
-  });
-  const subtree = hydrateIndex({
-    hostBlocksSubtree: ["example.com"],
-    regexBlocks: [],
-    regexAllows: [],
-    builtAt: 1,
-  });
-
-  assert.equal(evaluate("https://example.com/page", exact).blocked, true);
-  assert.equal(evaluate("https://www.example.com/page", exact).blocked, false);
-  assert.equal(evaluate("https://example.com/page", subtree).blocked, true);
-  assert.equal(evaluate("https://www.example.com/page", subtree).blocked, true);
-});
-
-test("compiled index can serialize and hydrate", () => {
-  const serialized = serializeIndex({
-    hostBlocksExact: new Set(["b.example", "a.example"]),
-    hostAllowsExact: new Set(["allow.example"]),
-    hostBlocksSubtree: new Set(["subtree.example"]),
-    hostAllowsSubtree: new Set(["allow-subtree.example"]),
-    regexBlocks: [/ads/i],
-    regexAllows: [{ source: "safe", flags: "i" }],
-    builtAt: 42,
-  });
-  const hydrated = hydrateIndex(serialized);
-
-  assert.deepEqual(serialized.hostBlocksExact, ["a.example", "b.example"]);
-  assert.deepEqual(serialized.hostBlocksSubtree, ["subtree.example"]);
-  assert.equal(evaluate("https://b.example", hydrated).blocked, true);
-  assert.equal(evaluate("https://x.b.example", hydrated).blocked, false);
-  assert.equal(evaluate("https://x.subtree.example", hydrated).blocked, true);
-  assert.equal(evaluate("https://x.test/safe-ads.js", hydrated).blocked, false);
-});
 
 test("list parser automatically detects hosts or adblock format", () => {
   const hosts = parseListText("0.0.0.0 ads.example\n127.0.0.1 tracker.example");
@@ -339,7 +223,7 @@ test("updateAllLists fetches full body when validators exist without cached body
         url: "https://example.com/l.txt",
         format: "auto",
         enabled: true,
-        etag: "\"old\"",
+        etag: '"old"',
         lastModified: "Wed, 01 Jan 2025 00:00:00 GMT",
         lastError: null,
         ruleCount: 0,
@@ -351,12 +235,15 @@ test("updateAllLists fetches full body when validators exist without cached body
   globalThis.chrome = chrome;
   globalThis.fetch = async (_url, options) => {
     requestHeaders = options.headers;
-    if (requestHeaders["If-None-Match"] || requestHeaders["If-Modified-Since"]) {
+    if (
+      requestHeaders["If-None-Match"] ||
+      requestHeaders["If-Modified-Since"]
+    ) {
       return new Response("", { status: 304 });
     }
     return new Response("0.0.0.0 ads.example.com", {
       headers: {
-        ETag: "\"fresh\"",
+        ETag: '"fresh"',
         "Last-Modified": "Thu, 02 Jan 2025 00:00:00 GMT",
         "Content-Type": "text/plain",
       },
@@ -368,7 +255,7 @@ test("updateAllLists fetches full body when validators exist without cached body
     assert.equal(requestHeaders["If-None-Match"], undefined);
     assert.equal(requestHeaders["If-Modified-Since"], undefined);
     assert.equal(store.rawLists.abc, "0.0.0.0 ads.example.com");
-    assert.equal(store.lists[0].etag, "\"fresh\"");
+    assert.equal(store.lists[0].etag, '"fresh"');
     assert.equal(store.lists[0].lastError, null);
   } finally {
     globalThis.chrome = originalChrome;
