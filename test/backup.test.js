@@ -18,6 +18,7 @@ function makeState() {
   return {
     settings: {
       blockAction: "show_block_page",
+      theme: "dark",
       updateIntervalDays: 7,
       passwordEnabled: true,
       passwordHash,
@@ -65,11 +66,43 @@ function makePayload(overrides = {}) {
 test("settings export omits derived and cached data by default", () => {
   const payload = JSON.parse(createSettingsExport(makeState()));
 
+  assert.equal(payload.settings.theme, "dark");
   assert.equal("compiledIndex" in payload, false);
   assert.equal("pendingRebuild" in payload, false);
   assert.equal("rawLists" in payload, false);
   assert.equal("password" in payload, false);
   assert.equal("passwordHash" in payload.settings, false);
+});
+
+test("settings import validates theme when present", () => {
+  const imported = parseSettingsImport(
+    JSON.stringify(
+      makePayload({
+        settings: {
+          blockAction: "show_block_page",
+          theme: "light",
+          updateIntervalDays: 7,
+        },
+      }),
+    ),
+  );
+
+  assert.equal(imported.settings.theme, "light");
+  assert.throws(
+    () =>
+      parseSettingsImport(
+        JSON.stringify(
+          makePayload({
+            settings: {
+              blockAction: "show_block_page",
+              theme: "blue",
+              updateIntervalDays: 7,
+            },
+          }),
+        ),
+      ),
+    /Theme setting/,
+  );
 });
 
 test("settings export includes password settings only when requested", () => {
@@ -103,34 +136,11 @@ test("settings import rejects invalid custom rules", () => {
   );
 });
 
-test("settings import validates raw list bodies", () => {
-  assert.throws(
-    () =>
-      parseSettingsImport(
-        JSON.stringify(
-          makePayload({
-            lists: [
-              {
-                id: "list-1",
-                name: "List",
-                url: "https://example.com/list.txt",
-                format: "hosts",
-                enabled: true,
-              },
-            ],
-            rawLists: { "list-1": "not a hosts file" },
-          }),
-        ),
-      ),
-    /List:/,
-  );
-});
-
-test("settings import supports exports without raw list bodies", () => {
+test("settings import ignores raw list bodies", () => {
   const imported = parseSettingsImport(
     JSON.stringify(
       makePayload({
-        rawLists: undefined,
+        rawLists: { "list-1": "not a hosts file" },
         lists: [
           {
             id: "list-1",
@@ -148,7 +158,7 @@ test("settings import supports exports without raw list bodies", () => {
   assert.equal(imported.lists.length, 1);
 });
 
-test("settings import rebuilds compiled index from source data", async () => {
+test("settings import rebuilds compiled index from custom rules", async () => {
   const originalChrome = globalThis.chrome;
   const store = {};
   const payload = makePayload({
@@ -188,13 +198,13 @@ test("settings import rebuilds compiled index from source data", async () => {
     const index = hydrateIndex(store.compiledIndex);
 
     assert.equal("compiledIndex" in payload, false);
-    assert.equal(evaluate("https://ads.example", index).blocked, true);
+    assert.equal(evaluate("https://ads.example", index).blocked, false);
     assert.equal(
       evaluate("https://cdn.tracker.example/app.js", index).blocked,
       true,
     );
     assert.equal(evaluate("https://safe.example", index).blocked, false);
-    assert.equal(store.pendingRebuild, false);
+    assert.equal(store.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;
   }

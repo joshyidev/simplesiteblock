@@ -43,9 +43,22 @@ button:hover {
   background: var(--accent-strong);
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  background: var(--accent);
+}
+
 button.ghost {
   background: transparent;
   color: var(--accent);
+}
+
+button.ghost:hover {
+  color: white;
 }
 
 button.danger {
@@ -360,6 +373,27 @@ td:nth-child(6) {
   flex-shrink: 0;
 }
 
+.about-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.about-list div {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 10px;
+}
+
+.about-list dt {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.about-list dd {
+  margin: 0;
+}
+
 .field-inline {
   display: flex;
   align-items: center;
@@ -470,8 +504,25 @@ td:nth-child(6) {
   }
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #181a1b;
+  --text: #f0f2ef;
+  --muted: #a6aba4;
+  --panel: #222526;
+  --line: #3a3f3d;
+  --accent: #35a58f;
+  --accent-strong: #2b8876;
+  --danger: #f97066;
+  --danger-bg: #351716;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #181a1b;
     --text: #f0f2ef;
     --muted: #a6aba4;

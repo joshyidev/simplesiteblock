@@ -2,7 +2,6 @@ import {
   compileAndStoreIndex,
   normalizeListUrl,
   parseCustomRules,
-  parseListText,
   reconcileAlarms,
 } from "./lists.js";
 import { DEFAULT_SETTINGS, savePendingRebuild } from "./storage.js";
@@ -11,6 +10,7 @@ const EXPORT_APP = "SimpleSiteBlock";
 const EXPORT_VERSION = 1;
 const BLOCK_ACTIONS = new Set(["show_block_page", "close_tab"]);
 const LIST_FORMATS = new Set(["auto", "hosts", "adblock"]);
+const THEMES = new Set(["system", "light", "dark"]);
 
 export function createSettingsExport(state, { includePassword = false } = {}) {
   const lists = sanitizeLists(state.lists || []);
@@ -57,9 +57,8 @@ export function parseSettingsImport(text) {
   parseCustomRules(customRules);
 
   const lists = sanitizeLists(payload.lists || []);
-  const rawLists = importRawLists(payload.rawLists || {}, lists);
 
-  return { settings, lists, rawLists, customRules };
+  return { settings, lists, rawLists: {}, customRules };
 }
 
 export async function importSettingsBackup(text) {
@@ -80,6 +79,9 @@ function exportSettings(settings) {
     blockAction: validBlockAction(settings.blockAction)
       ? settings.blockAction
       : DEFAULT_SETTINGS.blockAction,
+    theme: validTheme(settings.theme)
+      ? settings.theme
+      : DEFAULT_SETTINGS.theme,
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
@@ -96,6 +98,9 @@ function importSettings(settings, password) {
   if (!validUpdateInterval(settings.updateIntervalDays)) {
     throw new Error("Auto-update interval setting is invalid.");
   }
+  if (settings.theme !== undefined && !validTheme(settings.theme)) {
+    throw new Error("Theme setting is invalid.");
+  }
 
   const passwordSettings =
     password === undefined
@@ -105,6 +110,7 @@ function importSettings(settings, password) {
   return {
     ...DEFAULT_SETTINGS,
     blockAction: settings.blockAction,
+    theme: settings.theme || DEFAULT_SETTINGS.theme,
     updateIntervalDays: settings.updateIntervalDays,
     ...passwordSettings,
     lastUnlockAt: 0,
@@ -178,33 +184,16 @@ function sanitizeLists(lists) {
   });
 }
 
-function importRawLists(rawLists, lists) {
-  if (!rawLists || typeof rawLists !== "object" || Array.isArray(rawLists)) {
-    throw new Error("Raw list data is invalid.");
-  }
-
-  const listsById = new Map(lists.map((list) => [list.id, list]));
-  const imported = {};
-  for (const [id, text] of Object.entries(rawLists)) {
-    const list = listsById.get(id);
-    if (!list) continue;
-    if (typeof text !== "string") throw new Error("Raw list data is invalid.");
-    try {
-      parseListText(text, list.format);
-    } catch (error) {
-      throw new Error(`${list.name}: ${error.message}`);
-    }
-    imported[id] = text;
-  }
-  return imported;
-}
-
 function validBlockAction(value) {
   return BLOCK_ACTIONS.has(value);
 }
 
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
+}
+
+function validTheme(value) {
+  return THEMES.has(value);
 }
 
 function validRuleCount(value) {
@@ -224,6 +213,6 @@ function isPasswordHash(value) {
   );
 }
 
-function hasEnabledListWithoutRawText({ lists, rawLists }) {
-  return lists.some((list) => list.enabled && !(list.id in rawLists));
+function hasEnabledListWithoutRawText({ lists }) {
+  return lists.some((list) => list.enabled);
 }

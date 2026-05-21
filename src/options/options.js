@@ -15,17 +15,28 @@ import {
   getState,
   saveSettings,
 } from "../background/storage.js";
+import {
+  applyTheme,
+  saveAndApplyTheme,
+  watchThemeChanges,
+} from "../theme.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
 const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
 const lockButton = document.querySelector("#lockButton");
+const manifest = chrome.runtime.getManifest();
 let lastPendingRebuild = false;
 
+watchThemeChanges((theme) => {
+  const input = app.querySelector(`input[name="theme"][value="${theme}"]`);
+  if (input) input.checked = true;
+});
 void boot();
 
 async function boot() {
   const state = await getState();
+  applyTheme(state.settings.theme);
   if (!isOptionsUnlocked(state.settings)) {
     app.hidden = true;
     lockButton.hidden = true;
@@ -77,7 +88,7 @@ function renderApp(state) {
             URL
             <input name="url" type="url" placeholder="https://example.com/list.txt" required>
           </label>
-          <button class="fit" type="submit">Add list</button>
+          <button id="addListButton" class="fit" type="submit">Add list</button>
         </form>
       </section>
 
@@ -89,7 +100,7 @@ function renderApp(state) {
           </label>
           <p class="muted">Use one domain per line. Plain domains match exactly; ||example.com^ includes subdomains; @@ allows a match.</p>
           <div class="form-actions custom-rules-actions">
-            <button class="fit" type="submit">Save rules</button>
+            <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
             <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
           </div>
         </form>
@@ -101,6 +112,28 @@ function renderApp(state) {
         <div class="choice" id="blockActionChoices">
           <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show blocked page</label>
           <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab immediately</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <h2>Password</h2>
+          <div class="section-header-actions">
+            <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+            <form id="disablePasswordForm"${state.settings.passwordEnabled ? "" : ' style="visibility:hidden"'}><button class="danger fit" type="submit">Disable</button></form>
+          </div>
+        </div>
+        <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
+        ${renderPassword(state.settings)}
+      </section>
+
+      <section class="panel">
+        <h2>Appearance</h2>
+        <p class="muted section-desc">Theme used by options, popup, and blocked pages.</p>
+        <div class="choice" id="themeChoices">
+          ${renderThemeChoice("system", "System", state.settings.theme)}
+          ${renderThemeChoice("light", "Light", state.settings.theme)}
+          ${renderThemeChoice("dark", "Dark", state.settings.theme)}
         </div>
       </section>
 
@@ -122,18 +155,6 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <div class="section-header">
-          <h2>Password</h2>
-          <div class="section-header-actions">
-            <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
-            <form id="disablePasswordForm"${state.settings.passwordEnabled ? "" : ' style="visibility:hidden"'}><button class="danger fit" type="submit">Disable</button></form>
-          </div>
-        </div>
-        <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
-        ${renderPassword(state.settings)}
-      </section>
-
-      <section class="panel">
         <h2>Diagnostics</h2>
         <div class="row">
           <label class="field">
@@ -143,6 +164,21 @@ function renderApp(state) {
           <button id="testUrlButton" class="fit" type="button">Test</button>
         </div>
         <output id="testVerdict" class="verdict">No test run.</output>
+      </section>
+
+      <section class="panel">
+        <h2>About</h2>
+        <p class="muted section-desc">${escapeHtml(manifest.description || "Block sites from hosts-file and Adblock-syntax lists.")}</p>
+        <dl class="about-list">
+          <div>
+            <dt>Name</dt>
+            <dd>${escapeHtml(manifest.name)}</dd>
+          </div>
+          <div>
+            <dt>Version</dt>
+            <dd>${escapeHtml(manifest.version)}</dd>
+          </div>
+        </dl>
       </section>
     </div>
   `;
@@ -208,6 +244,11 @@ function renderPassword(settings) {
   `;
 }
 
+function renderThemeChoice(value, label, theme) {
+  const checked = (theme || "system") === value ? "checked" : "";
+  return `<label><input type="radio" name="theme" value="${value}" ${checked}> ${label}</label>`;
+}
+
 function renderLists(lists) {
   if (lists.length === 0) {
     return `<p class="muted">No lists added.</p>`;
@@ -259,6 +300,13 @@ function bindEvents(state) {
     });
 
   app
+    .querySelector("#themeChoices")
+    .addEventListener("change", async (event) => {
+      if (event.target.name !== "theme") return;
+      await saveAndApplyTheme(event.target.value);
+    });
+
+  app
     .querySelector("#addListForm")
     .addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -284,11 +332,13 @@ function bindEvents(state) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       setCustomRulesStatus("Saving custom rules...");
+      setIndexControlsDisabled(true);
       try {
         await updateCustomRules(form.get("customRules"));
         await boot();
         setCustomRulesStatus("Custom rules saved.");
       } catch (error) {
+        setIndexControlsDisabled(false);
         const message = error.message || "Something went wrong.";
         setCustomRulesStatus(message);
         window.alert(message);
@@ -304,11 +354,13 @@ function bindEvents(state) {
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
     setListsStatus("Updating lists...");
+    setIndexControlsDisabled(true);
     try {
       await updateAllLists();
       await boot();
       setListsStatus("All lists updated.");
     } catch (error) {
+      setIndexControlsDisabled(false);
       const message = error.message || "Something went wrong.";
       setListsStatus(message);
       window.alert(message);
@@ -408,6 +460,7 @@ function bindEvents(state) {
     }
 
     setBackupStatus("Importing settings...");
+    setIndexControlsDisabled(true);
     try {
       await importSettingsBackup(await file.text());
       const nextState = await getState();
@@ -419,6 +472,7 @@ function bindEvents(state) {
       await boot();
       setBackupStatus("Settings imported.");
     } catch (error) {
+      setIndexControlsDisabled(false);
       const message = error.message || "Settings import failed.";
       setBackupStatus(message);
       window.alert(message);
@@ -470,6 +524,24 @@ function setPasswordStatus(message) {
   const passwordStatus = app.querySelector("#passwordStatus");
   if (passwordStatus) {
     passwordStatus.textContent = message;
+  }
+}
+
+function setIndexControlsDisabled(disabled) {
+  const selectors = [
+    "#addListButton",
+    "#saveCustomRulesButton",
+    "#updateAllButton",
+    "#importSettingsButton",
+    "#testUrlButton",
+    ".list-enabled",
+    ".remove-list",
+  ];
+
+  for (const selector of selectors) {
+    for (const control of app.querySelectorAll(selector)) {
+      control.disabled = disabled;
+    }
   }
 }
 
