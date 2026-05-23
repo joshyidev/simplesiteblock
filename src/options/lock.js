@@ -15,7 +15,12 @@ export function renderLock(
 ) {
   container.hidden = false;
   container.innerHTML = `
-    <h2>Options locked</h2>
+    <div class="section-header lock-header">
+      <h2>Options locked</h2>
+      <div class="section-header-actions">
+        <p class="lock-status muted" id="lockStatus" role="status" aria-live="polite"></p>
+      </div>
+    </div>
     <form id="unlockForm" class="row">
       <label class="field">
         Password
@@ -23,7 +28,6 @@ export function renderLock(
       </label>
       <button class="fit" type="submit">Unlock</button>
     </form>
-    <p class="lock-status muted" id="lockStatus" role="status" aria-live="polite"></p>
   `;
 
   container

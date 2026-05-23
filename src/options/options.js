@@ -19,6 +19,7 @@ const app = document.querySelector("#app");
 const lock = document.querySelector("#lock");
 const shell = document.querySelector(".shell");
 const manifest = ext.runtime.getManifest();
+const MIN_PASSWORD_LENGTH = 8;
 let lastPendingRebuild = false;
 
 void boot();
@@ -151,12 +152,22 @@ function renderApp(state) {
         <output id="testVerdict" class="verdict">No test run.</output>
       </section>
 
+      <section class="panel">
+        <h2>Links</h2>
+        <nav class="link-list" aria-label="Help and project links">
+          <a href="#">Documentation</a>
+          <a href="#">Bug report (GitHub)</a>
+          <a href="#">Source code (MIT)</a>
+        </nav>
+      </section>
+
       <section class="panel about-panel" aria-label="About ${escapeHtml(manifest.name)}">
         <div class="about-summary">
           <img class="about-icon" src="../../icons/icon256.png" alt="" width="64" height="64">
           <div>
             <p class="about-name">${escapeHtml(manifest.name)}</p>
-            <p class="about-version muted">Version ${escapeHtml(manifest.version)}</p>
+            <p class="about-version">${escapeHtml(manifest.version)}</p>
+            <p class="about-version">Author: Joshua Yi</p>
           </div>
         </div>
       </section>
@@ -198,11 +209,11 @@ function renderPassword(settings) {
       <form id="enablePasswordForm" class="row">
         <label class="field">
           New password
-          <input name="password" type="password" autocomplete="new-password" required>
+          <input name="password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
         </label>
         <label class="field">
           Confirm
-          <input name="confirm" type="password" autocomplete="new-password" required>
+          <input name="confirm" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
         </label>
         <button class="fit password-submit" type="submit">Enable</button>
       </form>
@@ -213,11 +224,11 @@ function renderPassword(settings) {
     <form id="changePasswordForm" class="row">
       <label class="field">
         New password
-        <input name="password" type="password" autocomplete="new-password" required>
+        <input name="password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
       </label>
       <label class="field">
         Confirm
-        <input name="confirm" type="password" autocomplete="new-password" required>
+        <input name="confirm" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
       </label>
       <button class="fit password-submit" type="submit">Change</button>
     </form>
@@ -355,6 +366,10 @@ function bindEvents(state) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const password = form.get("password");
+      if (!isPasswordLongEnough(password)) {
+        setPasswordStatus("Password must be at least 8 characters.");
+        return;
+      }
       if (password !== form.get("confirm")) {
         setPasswordStatus("Passwords do not match.");
         return;
@@ -375,6 +390,10 @@ function bindEvents(state) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const password = form.get("password");
+      if (!isPasswordLongEnough(password)) {
+        setPasswordStatus("Password must be at least 8 characters.");
+        return;
+      }
       if (password !== form.get("confirm")) {
         setPasswordStatus("Passwords do not match.");
         return;
@@ -496,6 +515,10 @@ function setPasswordStatus(message) {
   if (passwordStatus) {
     passwordStatus.textContent = message;
   }
+}
+
+function isPasswordLongEnough(password) {
+  return typeof password === "string" && password.length >= MIN_PASSWORD_LENGTH;
 }
 
 function setIndexControlsDisabled(disabled) {

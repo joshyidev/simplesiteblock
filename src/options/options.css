@@ -91,13 +91,6 @@ textarea {
   padding: 28px 0 40px;
 }
 
-.shell.is-locked {
-  display: grid;
-  min-height: 100vh;
-  place-items: center;
-  padding: 0;
-}
-
 h1,
 h2,
 h3,
@@ -234,8 +227,11 @@ h3 {
 }
 
 .lock-status {
-  margin: 12px 0 0;
+  position: relative;
+  top: 4px;
+  margin: 0;
   font-size: 13px;
+  text-align: right;
 }
 
 .lock-status:empty {
@@ -244,7 +240,7 @@ h3 {
 
 .lock-panel {
   width: min(480px, 100%);
-  margin: 0;
+  margin: min(18vh, 140px) auto 0;
 }
 
 table {
@@ -331,10 +327,15 @@ td:nth-child(6) {
   gap: 10px;
 }
 
-.password-header .section-header-actions {
+.password-header .section-header-actions,
+.lock-header .section-header-actions {
   position: absolute;
   top: -3px;
   right: 0;
+}
+
+.password-header .section-header-actions {
+  min-height: 34px;
 }
 
 .list-summary {
@@ -349,6 +350,8 @@ td:nth-child(6) {
 }
 
 .list-status {
+  position: relative;
+  top: 2px;
   margin: 0;
   font-size: 13px;
 }
@@ -388,6 +391,16 @@ td:nth-child(6) {
   flex-shrink: 0;
 }
 
+.link-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.link-list a {
+  color: var(--accent);
+}
+
 .about-panel {
   padding: 16px 18px;
 }
@@ -406,8 +419,7 @@ td:nth-child(6) {
 
 .about-name {
   margin: 0 0 2px;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 16px;
 }
 
 .about-version {

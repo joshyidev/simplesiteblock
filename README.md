@@ -4,13 +4,14 @@
 
 <h1 align="center">SimpleSiteBlock</h1>
 
-SimpleSiteBlock is a Manifest V3 browser extension that blocks top-level navigations using hosts-file and a practical subset of Adblock Plus filter lists.
+Like the name suggests, SimpleSiteBlock is a simple site blocker for blocking distracting sites. It can use your own list of sites plus any popular blocklists you want to add.
+
+To open the options page, click the SimpleSiteBlock icon in your browser's toolbar and select Options in the popup.
 
 ## Build
 
 ```sh
-npm run build:chrome
-npm run build:firefox
+npm run build
 ```
 
 Chrome output is written to `dist/chrome`. Firefox output is written to `dist/firefox`.
@@ -34,7 +35,7 @@ Chrome output is written to `dist/chrome`. Firefox output is written to `dist/fi
 
 ## Development
 
-Run the pure parser and engine tests:
+To run tests:
 
 ```sh
 npm test

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SimpleSiteBlock",
   "description": "Block sites from hosts-file and Adblock-syntax lists.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "permissions": [
     "webNavigation",
     "tabs",
