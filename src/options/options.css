@@ -308,6 +308,12 @@ td:nth-child(6) {
   white-space: nowrap;
 }
 
+.edit-list-name,
+.edit-list-url {
+  margin-left: -1px;
+  padding-left: 0;
+}
+
 .section-header {
   position: relative;
   display: flex;
