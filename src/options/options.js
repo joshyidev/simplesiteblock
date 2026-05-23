@@ -85,7 +85,7 @@ function renderApp(state) {
         <h2>Custom rules</h2>
         <form id="customRulesForm" class="custom-rules-form">
           <label class="field">
-            <textarea id="customRules" name="customRules" aria-label="Domains or Adblock rules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
+            <textarea id="customRules" name="customRules" aria-label="Domains or supported Adblock rules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
           </label>
           <p class="muted">Use one domain per line. Plain domains match exactly; ||example.com^ includes subdomains; @@ allows a match.</p>
           <div class="form-actions custom-rules-actions">
@@ -549,9 +549,7 @@ function countRules(index) {
     (index.hostBlocksExact?.length || 0) +
     (index.hostAllowsExact?.length || 0) +
     (index.hostBlocksSubtree?.length || 0) +
-    (index.hostAllowsSubtree?.length || 0) +
-    (index.regexBlocks?.length || 0) +
-    (index.regexAllows?.length || 0)
+    (index.hostAllowsSubtree?.length || 0)
   );
 }
 

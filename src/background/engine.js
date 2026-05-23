@@ -3,8 +3,6 @@ export const EMPTY_SERIALIZED_INDEX = Object.freeze({
   hostAllowsExact: [],
   hostBlocksSubtree: [],
   hostAllowsSubtree: [],
-  regexBlocks: [],
-  regexAllows: [],
   builtAt: 0,
 });
 
@@ -14,8 +12,6 @@ export function hydrateIndex(serialized = EMPTY_SERIALIZED_INDEX) {
     hostAllowsExact: new Set(serialized.hostAllowsExact || []),
     hostBlocksSubtree: new Set(serialized.hostBlocksSubtree || []),
     hostAllowsSubtree: new Set(serialized.hostAllowsSubtree || []),
-    regexBlocks: hydrateRegexes(serialized.regexBlocks || []),
-    regexAllows: hydrateRegexes(serialized.regexAllows || []),
     builtAt: serialized.builtAt || 0,
   };
 }
@@ -26,8 +22,6 @@ export function serializeIndex(index) {
     hostAllowsExact: [...(index.hostAllowsExact || [])].sort(),
     hostBlocksSubtree: [...(index.hostBlocksSubtree || [])].sort(),
     hostAllowsSubtree: [...(index.hostAllowsSubtree || [])].sort(),
-    regexBlocks: [...(index.regexBlocks || [])].map(serializeRegex),
-    regexAllows: [...(index.regexAllows || [])].map(serializeRegex),
     builtAt: index.builtAt || Date.now(),
   };
 }
@@ -38,8 +32,6 @@ export function createCombinedIndex(parsedLists) {
     hostAllowsExact: new Set(),
     hostBlocksSubtree: new Set(),
     hostAllowsSubtree: new Set(),
-    regexBlocks: [],
-    regexAllows: [],
     builtAt: Date.now(),
   };
 
@@ -52,8 +44,6 @@ export function createCombinedIndex(parsedLists) {
       combined.hostBlocksSubtree.add(host);
     for (const host of parsed.hostAllowsSubtree || [])
       combined.hostAllowsSubtree.add(host);
-    combined.regexBlocks.push(...(parsed.regexBlocks || []));
-    combined.regexAllows.push(...(parsed.regexAllows || []));
   }
 
   return serializeIndex(combined);
@@ -75,9 +65,6 @@ export function evaluate(url, index) {
   if (matchesHostExact(index.hostAllowsExact, host)) return { blocked: false };
   if (matchesHostSubtree(index.hostAllowsSubtree, host))
     return { blocked: false };
-  for (const rule of index.regexAllows || []) {
-    if (testRule(rule, url)) return { blocked: false };
-  }
 
   if (matchesHostExact(index.hostBlocksExact, host)) {
     return { blocked: true, reason: `host-exact:${host}` };
@@ -85,11 +72,6 @@ export function evaluate(url, index) {
 
   if (matchesHostSubtree(index.hostBlocksSubtree, host)) {
     return { blocked: true, reason: `host-subtree:${host}` };
-  }
-
-  for (const rule of index.regexBlocks || []) {
-    if (testRule(rule, url))
-      return { blocked: true, reason: `regex:${rule.source}` };
   }
 
   return { blocked: false };
@@ -106,27 +88,4 @@ export function matchesHostSubtree(hostSet, host) {
     if (hostSet.has(labels.slice(index).join("."))) return true;
   }
   return false;
-}
-
-function hydrateRegexes(records) {
-  const regexes = [];
-  for (const record of records) {
-    try {
-      regexes.push(new RegExp(record.source, record.flags || "i"));
-    } catch {
-      // Bad persisted data should not break every navigation.
-    }
-  }
-  return regexes;
-}
-
-function serializeRegex(rule) {
-  return rule instanceof RegExp
-    ? { source: rule.source, flags: rule.flags }
-    : { source: rule.source, flags: rule.flags || "i" };
-}
-
-function testRule(rule, url) {
-  rule.lastIndex = 0;
-  return rule.test(url);
 }

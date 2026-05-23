@@ -19,7 +19,7 @@ test("hosts parser normalizes hosts, skips comments and local aliases", () => {
   assert.equal(parsed.mappingLineCount, 2);
 });
 
-test("adblock parser supports host blocks, host allows, regexes, and cosmetic skips", () => {
+test("adblock parser supports host blocks, host allows, and skips unsupported patterns", () => {
   const parsed = parseAdblock(`
     ! comment
     ||ads.example.com^
@@ -33,8 +33,9 @@ test("adblock parser supports host blocks, host allows, regexes, and cosmetic sk
 
   assert.equal(parsed.hostBlocksSubtree.has("ads.example.com"), true);
   assert.equal(parsed.hostAllowsSubtree.has("allowed.example.com"), true);
-  assert.equal(parsed.regexBlocks.length, 3);
-  assert.equal(parsed.warnings.length >= 2, true);
+  assert.equal("regexBlocks" in parsed, false);
+  assert.equal("regexAllows" in parsed, false);
+  assert.equal(parsed.warnings.length, 5);
 });
 
 test("adblock parser supports bare domain lines and hash comments", () => {
@@ -50,6 +51,6 @@ test("adblock parser supports bare domain lines and hash comments", () => {
   assert.equal(parsed.hostBlocksExact.has("example.com"), true);
   assert.equal(parsed.hostBlocksExact.has("example.org"), true);
   assert.equal(parsed.hostBlocksExact.has("example.net"), true);
-  assert.equal(parsed.regexBlocks.length, 1);
-  assert.equal(parsed.warnings.length, 1);
+  assert.equal("regexBlocks" in parsed, false);
+  assert.equal(parsed.warnings.length, 2);
 });

@@ -284,8 +284,6 @@ export function parseCustomRules(text) {
       hostAllowsExact: new Set(),
       hostBlocksSubtree: new Set(),
       hostAllowsSubtree: new Set(),
-      regexBlocks: [],
-      regexAllows: [],
       warnings: [],
       detectedFormat: "adblock",
     };
@@ -308,8 +306,6 @@ function asHostsParsed(parsed, detectedFormat) {
     hostAllowsExact: new Set(),
     hostBlocksSubtree: new Set(),
     hostAllowsSubtree: new Set(),
-    regexBlocks: [],
-    regexAllows: [],
     warnings: parsed.warnings,
     mappingLineCount: parsed.mappingLineCount || 0,
     detectedFormat,
@@ -321,9 +317,7 @@ function countRules(parsed) {
     (parsed.hostBlocksExact?.size || 0) +
     (parsed.hostAllowsExact?.size || 0) +
     (parsed.hostBlocksSubtree?.size || 0) +
-    (parsed.hostAllowsSubtree?.size || 0) +
-    (parsed.regexBlocks?.length || 0) +
-    (parsed.regexAllows?.length || 0)
+    (parsed.hostAllowsSubtree?.size || 0)
   );
 }
 

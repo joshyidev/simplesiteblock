@@ -38,7 +38,7 @@ test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
 
   assert.equal(parsed.detectedFormat, "hosts");
   assert.equal(parsed.hostBlocksExact.has("example-fakenews.test"), true);
-  assert.equal(parsed.regexBlocks.length, 0);
+  assert.equal("regexBlocks" in parsed, false);
 });
 
 test("hosts parser output is exact-only after list parsing", () => {
@@ -76,7 +76,8 @@ test("custom rules parse as Adblock syntax", () => {
   assert.equal(parsed.hostBlocksExact.has("custom-domain.test"), true);
   assert.equal(parsed.hostBlocksSubtree.has("custom-block.test"), true);
   assert.equal(parsed.hostAllowsSubtree.has("custom-allow.test"), true);
-  assert.equal(parsed.regexBlocks.length, 1);
+  assert.equal("regexBlocks" in parsed, false);
+  assert.equal(parsed.warnings.length, 1);
 });
 
 test("custom rules reject non-Adblock text", () => {
@@ -147,8 +148,6 @@ function makeChromeMock({
       hostAllowsExact: [],
       hostBlocksSubtree: [],
       hostAllowsSubtree: [],
-      regexBlocks: [],
-      regexAllows: [],
       builtAt: 1,
     },
     pendingRebuild: false,
