@@ -163,7 +163,7 @@ function renderApp(state) {
 
       <section class="panel about-panel" aria-label="About ${escapeHtml(manifest.name)}">
         <div class="about-summary">
-          <img class="about-icon" src="../../icons/icon256.png" alt="" width="64" height="64">
+          <img class="about-icon" src="../../icons/icon128.png" alt="" width="128" height="128">
           <div>
             <p class="about-name">${escapeHtml(manifest.name)}</p>
             <p class="about-version">${escapeHtml(manifest.version)}</p>
