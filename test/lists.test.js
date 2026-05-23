@@ -10,6 +10,7 @@ import {
   removeList,
   updateAllLists,
   updateCustomRules,
+  updateListIdentity,
   updateListSettings,
 } from "../src/background/lists.js";
 
@@ -208,6 +209,138 @@ test("addList saves list metadata and marks pending without fetching", async () 
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("updateListIdentity changes name without clearing cached list body", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Old name",
+        url: "https://example.com/list.txt",
+        enabled: true,
+        etag: '"old"',
+        lastModified: "Wed, 01 Jan 2025 00:00:00 GMT",
+        lastError: "previous error",
+        ruleCount: 12,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await updateListIdentity("abc", {
+      name: "New name",
+      url: " https://example.com/list.txt ",
+    });
+
+    assert.equal(store.lists[0].name, "New name");
+    assert.equal(store.lists[0].url, "https://example.com/list.txt");
+    assert.equal(store.lists[0].etag, '"old"');
+    assert.equal(store.lists[0].lastModified, "Wed, 01 Jan 2025 00:00:00 GMT");
+    assert.equal(store.lists[0].lastError, "previous error");
+    assert.equal(store.lists[0].ruleCount, 12);
+    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example");
+    assert.equal(written.some((w) => "rawLists" in w), false);
+    assert.equal(written.some((w) => "pendingRebuild" in w), false);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateListIdentity changes URL, clears cached body, and marks pending", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Old name",
+        url: "https://example.com/list.txt",
+        enabled: true,
+        etag: '"old"',
+        lastModified: "Wed, 01 Jan 2025 00:00:00 GMT",
+        lastError: "previous error",
+        ruleCount: 12,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await updateListIdentity("abc", {
+      name: " ",
+      url: " HTTPS://Example.ORG/new-list.txt ",
+    });
+
+    assert.equal(store.lists[0].name, "example.org");
+    assert.equal(store.lists[0].url, "https://example.org/new-list.txt");
+    assert.equal(store.lists[0].etag, null);
+    assert.equal(store.lists[0].lastModified, null);
+    assert.equal(store.lists[0].lastError, null);
+    assert.equal(store.lists[0].ruleCount, 0);
+    assert.equal("abc" in store.rawLists, false);
+    const rawWrite = written.find((w) => "rawLists" in w);
+    assert.ok(rawWrite, "rawLists should have been saved");
+    const pendingWrite = written.find((w) => "pendingRebuild" in w);
+    assert.ok(pendingWrite, "pendingRebuild should be set");
+    assert.equal(pendingWrite.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateListIdentity rejects duplicate and invalid URLs", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "One",
+        url: "https://example.com/one.txt",
+        enabled: true,
+      },
+      {
+        id: "def",
+        name: "Two",
+        url: "https://example.com/two.txt",
+        enabled: true,
+      },
+    ],
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await assert.rejects(
+      () =>
+        updateListIdentity("abc", {
+          name: "Duplicate",
+          url: "https://example.com/two.txt",
+        }),
+      /already been added/,
+    );
+    await assert.rejects(
+      () =>
+        updateListIdentity("abc", {
+          name: "Broken",
+          url: "not a url",
+        }),
+      /valid list URL/,
+    );
+    await assert.rejects(
+      () =>
+        updateListIdentity("missing", {
+          name: "Missing",
+          url: "https://example.com/three.txt",
+        }),
+      /List not found/,
+    );
+    assert.equal(written.length, 0, "invalid edits should not write storage");
+  } finally {
+    globalThis.chrome = originalChrome;
   }
 });
 

@@ -70,6 +70,46 @@ export async function removeList(listId) {
   await savePendingRebuild(true);
 }
 
+export async function updateListIdentity(listId, { name, url }) {
+  const state = await getState();
+  const target = state.lists.find((list) => list.id === listId);
+  if (!target) throw new Error("List not found");
+
+  const normalizedUrl = normalizeListUrl(url);
+  if (
+    state.lists.some(
+      (list) =>
+        list.id !== listId && normalizeStoredListUrl(list.url) === normalizedUrl,
+    )
+  ) {
+    throw new Error("This list has already been added.");
+  }
+
+  const urlChanged = normalizeStoredListUrl(target.url) !== normalizedUrl;
+  const lists = state.lists.map((list) =>
+    list.id === listId
+      ? {
+          ...list,
+          name: name?.trim() || new URL(normalizedUrl).hostname,
+          url: normalizedUrl,
+          lastError: urlChanged ? null : list.lastError,
+          etag: urlChanged ? null : list.etag,
+          lastModified: urlChanged ? null : list.lastModified,
+          ruleCount: urlChanged ? 0 : list.ruleCount,
+        }
+      : list,
+  );
+
+  await saveLists(lists);
+  if (!urlChanged) return lists;
+
+  const rawLists = { ...state.rawLists };
+  delete rawLists[listId];
+  await saveRawLists(rawLists);
+  await savePendingRebuild(true);
+  return lists;
+}
+
 export async function updateListSettings(listId, patch) {
   const state = await getState();
   const lists = state.lists.map((list) =>

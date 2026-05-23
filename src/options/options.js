@@ -9,6 +9,7 @@ import {
   removeList,
   updateAllLists,
   updateCustomRules,
+  updateListIdentity,
   updateListSettings,
 } from "../background/lists.js";
 import { getState, saveSettings } from "../background/storage.js";
@@ -21,6 +22,7 @@ const shell = document.querySelector(".shell");
 const manifest = ext.runtime.getManifest();
 const MIN_PASSWORD_LENGTH = 8;
 let lastPendingRebuild = false;
+let editingListId = null;
 
 void boot();
 
@@ -264,6 +266,21 @@ function renderListRow(list) {
   const error = list.lastError
     ? `<div class="error">${escapeHtml(list.lastError)}</div>`
     : "";
+  if (list.id === editingListId) {
+    return `
+      <tr data-list-id="${escapeHtml(list.id)}" class="is-editing">
+        <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled" disabled></td>
+        <td><input class="edit-list-name" type="text" aria-label="List name" value="${escapeHtml(list.name)}"></td>
+        <td><input class="edit-list-url" type="url" aria-label="List URL" value="${escapeHtml(list.url)}" required></td>
+        <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
+        <td class="actions">
+          <button class="save-list-edit" type="button">Save</button>
+          <button class="cancel-list-edit ghost" type="button">Cancel</button>
+        </td>
+      </tr>
+    `;
+  }
+
   return `
     <tr data-list-id="${escapeHtml(list.id)}">
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
@@ -271,7 +288,8 @@ function renderListRow(list) {
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
       <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
       <td class="actions">
-        <button class="remove-list ghost" type="button">Remove</button>
+        <button class="edit-list ghost" type="button">Edit</button>
+        <button class="remove-list danger" type="button">Remove</button>
       </td>
     </tr>
   `;
@@ -348,16 +366,60 @@ function bindEvents(state) {
 
   for (const row of app.querySelectorAll("tr[data-list-id]")) {
     const listId = row.dataset.listId;
-    row
-      .querySelector(".list-enabled")
-      .addEventListener("change", async (event) => {
+    const enabledInput = row.querySelector(".list-enabled:not(:disabled)");
+    if (enabledInput) {
+      enabledInput.addEventListener("change", async (event) => {
         await updateListSettings(listId, { enabled: event.target.checked });
         await boot();
       });
-    row.querySelector(".remove-list").addEventListener("click", async () => {
-      await removeList(listId);
-      await boot();
-    });
+    }
+
+    const editButton = row.querySelector(".edit-list");
+    if (editButton) {
+      editButton.addEventListener("click", async () => {
+        editingListId = listId;
+        await boot();
+      });
+    }
+
+    const saveEditButton = row.querySelector(".save-list-edit");
+    if (saveEditButton) {
+      saveEditButton.addEventListener("click", async () => {
+        setListsStatus("Saving list...");
+        setIndexControlsDisabled(true);
+        try {
+          await updateListIdentity(listId, {
+            name: row.querySelector(".edit-list-name").value,
+            url: row.querySelector(".edit-list-url").value,
+          });
+          editingListId = null;
+          await boot();
+          setListsStatus("List saved.");
+        } catch (error) {
+          setIndexControlsDisabled(false);
+          const message = error.message || "Something went wrong.";
+          setListsStatus(message);
+          window.alert(message);
+        }
+      });
+    }
+
+    const cancelEditButton = row.querySelector(".cancel-list-edit");
+    if (cancelEditButton) {
+      cancelEditButton.addEventListener("click", async () => {
+        editingListId = null;
+        await boot();
+      });
+    }
+
+    const removeButton = row.querySelector(".remove-list");
+    if (removeButton) {
+      removeButton.addEventListener("click", async () => {
+        await removeList(listId);
+        if (editingListId === listId) editingListId = null;
+        await boot();
+      });
+    }
   }
 
   const enableForm = app.querySelector("#enablePasswordForm");
@@ -529,6 +591,9 @@ function setIndexControlsDisabled(disabled) {
     "#importSettingsButton",
     "#testUrlButton",
     ".list-enabled",
+    ".edit-list",
+    ".save-list-edit",
+    ".cancel-list-edit",
     ".remove-list",
   ];
 
