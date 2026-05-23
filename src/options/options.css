@@ -66,6 +66,16 @@ button.danger {
   background: var(--danger);
 }
 
+button.ghost.danger {
+  background: transparent;
+  color: var(--danger);
+}
+
+button.ghost.danger:hover {
+  background: var(--danger);
+  color: white;
+}
+
 input,
 textarea,
 select {
@@ -279,7 +289,7 @@ td:nth-child(1) {
 
 th:nth-child(2),
 td:nth-child(2) {
-  width: 160px;
+  width: 220px;
 }
 
 th:nth-child(3),
@@ -302,6 +312,7 @@ td:nth-child(6) {
   width: 100px;
 }
 
+.name-cell,
 .url-cell {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -60,12 +60,12 @@ function renderApp(state) {
         <div class="section-actions list-controls">
           <label class="field-inline">
             Auto-update
-            <select id="updateInterval">
+            <select id="updateInterval" ${editingListId ? "disabled" : ""}>
               <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
               ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
             </select>
           </label>
-          <button id="updateAllButton" type="button">Update All</button>
+          <button id="updateAllButton" type="button" ${editingListId ? "disabled" : ""}>Update All</button>
           <p class="list-status muted" id="listsStatus" role="status" aria-live="polite"></p>
         </div>
         ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
@@ -73,13 +73,13 @@ function renderApp(state) {
         <form id="addListForm" class="row add-list-form">
           <label class="field">
             Name
-            <input name="name" placeholder="StevenBlack hosts">
+            <input name="name" placeholder="StevenBlack hosts" ${editingListId ? "disabled" : ""}>
           </label>
           <label class="field">
             URL
-            <input name="url" type="url" placeholder="https://example.com/list.txt" required>
+            <input name="url" type="url" placeholder="https://example.com/list.txt" required ${editingListId ? "disabled" : ""}>
           </label>
-          <button id="addListButton" class="fit" type="submit">Add list</button>
+          <button id="addListButton" class="fit" type="submit" ${editingListId ? "disabled" : ""}>Add list</button>
         </form>
       </section>
 
@@ -135,7 +135,7 @@ function renderApp(state) {
           </label>
           <div class="section-actions">
             <button id="exportSettingsButton" type="button">Export</button>
-            <button id="importSettingsButton" class="ghost" type="button">Import</button>
+            <button id="importSettingsButton" type="button">Import</button>
             <input id="settingsImportFile" type="file" accept=".txt,.json,application/json,text/plain" hidden>
             <p class="backup-status muted" id="backupStatus" role="status" aria-live="polite"></p>
           </div>
@@ -160,6 +160,7 @@ function renderApp(state) {
           <a href="#">Documentation</a>
           <a href="#">Bug report (GitHub)</a>
           <a href="#">Source code (MIT)</a>
+          <a href="#">Privacy Policy</a>
         </nav>
       </section>
 
@@ -268,28 +269,29 @@ function renderListRow(list) {
     : "";
   if (list.id === editingListId) {
     return `
-      <tr data-list-id="${escapeHtml(list.id)}" class="is-editing">
+      <tr data-list-id="${escapeHtml(list.id)}">
         <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled" disabled></td>
         <td><input class="edit-list-name" type="text" aria-label="List name" value="${escapeHtml(list.name)}"></td>
         <td><input class="edit-list-url" type="url" aria-label="List URL" value="${escapeHtml(list.url)}" required></td>
         <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
         <td class="actions">
-          <button class="save-list-edit" type="button">Save</button>
-          <button class="cancel-list-edit ghost" type="button">Cancel</button>
+          <button class="save-list-edit ghost" type="button">Save</button>
+          <button class="cancel-list-edit ghost danger" type="button">Cancel</button>
         </td>
       </tr>
     `;
   }
 
+  const actionDisabled = editingListId ? "disabled" : "";
   return `
     <tr data-list-id="${escapeHtml(list.id)}">
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
-      <td>${escapeHtml(list.name)}</td>
+      <td class="name-cell" title="${escapeHtml(list.name)}">${escapeHtml(list.name)}</td>
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
       <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
       <td class="actions">
-        <button class="edit-list ghost" type="button">Edit</button>
-        <button class="remove-list danger" type="button">Remove</button>
+        <button class="edit-list" type="button" ${actionDisabled}>Edit</button>
+        <button class="remove-list danger" type="button" ${actionDisabled}>Remove</button>
       </td>
     </tr>
   `;
@@ -415,6 +417,9 @@ function bindEvents(state) {
     const removeButton = row.querySelector(".remove-list");
     if (removeButton) {
       removeButton.addEventListener("click", async () => {
+        const list = state.lists.find((item) => item.id === listId);
+        const listName = list?.name || "this list";
+        if (!window.confirm(`Remove "${listName}"?`)) return;
         await removeList(listId);
         if (editingListId === listId) editingListId = null;
         await boot();
