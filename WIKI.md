@@ -58,8 +58,6 @@ Supported examples:
 example.com
 ||example.org^
 @@||allowed.example.org^
-|https://cdn.example.com/feed/*
-/video\d+\.js/
 example.net # inline comments work after whitespace
 ```
 
@@ -68,8 +66,6 @@ Supported rule types:
 - Bare domains, such as `example.com`, are exact host blocks.
 - Host rules, such as `||example.com^`, block the domain and its subdomains.
 - Allow rules start with `@@`.
-- Pattern rules can use `*`, `^`, and `|`.
-- Regex rules can be written as `/pattern/`.
 
 Exact and subtree examples:
 
@@ -92,28 +88,6 @@ Allow examples:
 The first rule blocks `example.com` and its subdomains. The second allows
 `safe.example.com` and its subdomains. The third allows exactly `example.org`.
 
-Pattern examples:
-
-```text
-|https://example.com/private/*
-example.com/profile^
-forum*
-```
-
-Pattern rules are matched against the full URL. A leading `|` anchors the rule
-to the beginning of the URL. A trailing `|` anchors it to the end. `*` matches
-any characters. `^` matches a separator or the end of the URL.
-
-Regex examples:
-
-```text
-/video\d+\.js/
-@@/safe-path.*video/
-```
-
-Regex rules are case-insensitive by default. Stateful flags such as `g` and `y`
-are stripped.
-
 ### Unsupported Or Skipped Adblock Syntax
 
 SimpleSiteBlock intentionally skips rules it cannot apply to top-level
@@ -125,8 +99,9 @@ Skipped syntax includes:
 - Scriptlet-style rules containing `#%#`.
 - Rules with unsupported options such as `$csp=`, `$rewrite=`,
   `$removeparam=`, `$redirect=`, `$replace=`, or `$permissions=`.
+- Pattern rules such as `|https://example.com/private/*`.
+- Regex rules such as `/video\d+\.js/`.
 - Rules containing whitespace inside the rule body.
-- Invalid regexes or patterns that cannot be compiled.
 
 Other Adblock options after `$`, such as `$third-party`, are accepted but do not
 change matching behavior. The rule target before `$` is what matters.
@@ -142,8 +117,6 @@ Good custom rules:
 example.com
 ||social.example^
 @@||work.social.example^
-|https://example.net/private/*
-/feed-[0-9]+\.js/
 ```
 
 Avoid hosts-file lines in custom rules:
@@ -183,7 +156,6 @@ If a list fails to import or update:
 - Confirm the URL returns plain text, not an HTML page.
 - Lists must be 10 MB or smaller to download.
 - Use hosts format only for real hosts-file mapping lines.
-- Use Adblock format for bare domains, `||domain^` rules, allow rules, patterns,
-  and regexes.
+- Use Adblock format for bare domains, `||domain^` rules, and allow rules.
 - Check for unsupported options or cosmetic filters if expected rules do not
   appear in the rule count.

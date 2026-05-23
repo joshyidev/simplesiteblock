@@ -8,10 +8,10 @@ export const EMPTY_SERIALIZED_INDEX = Object.freeze({
 
 export function hydrateIndex(serialized = EMPTY_SERIALIZED_INDEX) {
   return {
-    hostBlocksExact: new Set(serialized.hostBlocksExact || []),
-    hostAllowsExact: new Set(serialized.hostAllowsExact || []),
-    hostBlocksSubtree: new Set(serialized.hostBlocksSubtree || []),
-    hostAllowsSubtree: new Set(serialized.hostAllowsSubtree || []),
+    hostBlocksExact: sortedHosts(serialized.hostBlocksExact),
+    hostAllowsExact: sortedHosts(serialized.hostAllowsExact),
+    hostBlocksSubtree: sortedHosts(serialized.hostBlocksSubtree),
+    hostAllowsSubtree: sortedHosts(serialized.hostAllowsSubtree),
     builtAt: serialized.builtAt || 0,
   };
 }
@@ -78,14 +78,37 @@ export function evaluate(url, index) {
 }
 
 export function matchesHostExact(hostSet, host) {
-  return !!hostSet?.has(host.toLowerCase());
+  if (!hostSet || !host) return false;
+  const normalized = host.toLowerCase();
+  return hostSet instanceof Set
+    ? hostSet.has(normalized)
+    : binaryIncludes(hostSet, normalized);
 }
 
 export function matchesHostSubtree(hostSet, host) {
   if (!hostSet || !host) return false;
   const labels = host.toLowerCase().split(".");
   for (let index = 0; index < labels.length; index += 1) {
-    if (hostSet.has(labels.slice(index).join("."))) return true;
+    if (matchesHostExact(hostSet, labels.slice(index).join("."))) return true;
   }
+  return false;
+}
+
+function sortedHosts(hosts) {
+  return Array.isArray(hosts) ? hosts : [...(hosts || [])].sort();
+}
+
+function binaryIncludes(values, target) {
+  let low = 0;
+  let high = values.length - 1;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const value = values[mid];
+    if (value === target) return true;
+    if (value < target) low = mid + 1;
+    else high = mid - 1;
+  }
+
   return false;
 }

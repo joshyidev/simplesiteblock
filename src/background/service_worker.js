@@ -23,7 +23,7 @@ ext.storage.onChanged.addListener((changes, areaName) => {
     changes.rawLists ||
     changes.customRules
   ) {
-    stateReady = null;
+    warmState();
   }
   if (
     changes.settings ||
@@ -41,12 +41,20 @@ async function initialize() {
   const state = await ensureDefaults();
   if (!state.compiledIndex?.builtAt) await compileAndStoreIndex();
   await reconcileAlarms();
-  stateReady = null;
+  warmState();
 }
 
 async function loadState() {
   if (!stateReady) stateReady = getHydratedState();
   return stateReady;
+}
+
+function warmState() {
+  const nextState = getHydratedState();
+  stateReady = nextState;
+  nextState.catch(() => {
+    if (stateReady === nextState) stateReady = null;
+  });
 }
 
 async function handleNavigation(details) {
