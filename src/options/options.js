@@ -155,10 +155,10 @@ function renderApp(state) {
       <section class="panel">
         <h2>Links</h2>
         <nav class="link-list" aria-label="Help and project links">
-          <a href="#">Documentation</a>
-          <a href="#">Bug report (GitHub)</a>
-          <a href="#">Source code (MIT)</a>
-          <a href="#">Privacy Policy</a>
+          <a href="https://github.com/joshyidev/simplesiteblock/wiki">Documentation</a>
+          <a href="https://github.com/joshyidev/simplesiteblock/issues">Bug report (GitHub)</a>
+          <a href="https://github.com/joshyidev/simplesiteblock">Source code (MIT)</a>
+          <a href="https://github.com/joshyidev/simplesiteblock/wiki/Privacy-Policy">Privacy Policy</a>
         </nav>
       </section>
 
