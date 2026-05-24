@@ -7,20 +7,13 @@ import {
 } from "../src/background/backup.js";
 import { evaluate, hydrateIndex } from "../src/background/engine.js";
 
-const passwordHash = {
-  algo: "PBKDF2-SHA-256",
-  salt: "salt",
-  iterations: 250000,
-  hash: "hash",
-};
-
 function makeState() {
   return {
     settings: {
       blockAction: "show_block_page",
       updateIntervalDays: 7,
       passwordEnabled: true,
-      passwordHash,
+      password: "accountability",
     },
     lists: [
       {
@@ -69,7 +62,7 @@ test("settings export omits derived and cached data by default", () => {
   assert.equal("pendingRebuild" in payload, false);
   assert.equal("rawLists" in payload, false);
   assert.equal("password" in payload, false);
-  assert.equal("passwordHash" in payload.settings, false);
+  assert.equal("password" in payload.settings, false);
 });
 
 test("settings export includes password settings only when requested", () => {
@@ -79,8 +72,24 @@ test("settings export includes password settings only when requested", () => {
 
   assert.deepEqual(payload.password, {
     passwordEnabled: true,
-    passwordHash,
+    password: "accountability",
   });
+});
+
+test("settings import accepts plaintext password settings", () => {
+  const imported = parseSettingsImport(
+    JSON.stringify(
+      makePayload({
+        password: {
+          passwordEnabled: true,
+          password: "accountability",
+        },
+      }),
+    ),
+  );
+
+  assert.equal(imported.settings.passwordEnabled, true);
+  assert.equal(imported.settings.password, "accountability");
 });
 
 test("settings import rejects compiled indexes", () => {

@@ -1,5 +1,4 @@
 import { evaluate, hydrateIndex } from "../background/engine.js";
-import { hashPassword, verifyPassword } from "../background/crypto.js";
 import {
   createSettingsExport,
   importSettingsBackup,
@@ -32,7 +31,6 @@ async function boot() {
     shell.classList.add("is-locked");
     app.hidden = true;
     renderLock(lock, {
-      verifyPassword,
       settings: state.settings,
       onUnlocked: () => void boot(),
     });
@@ -443,7 +441,7 @@ function bindEvents(state) {
       }
       await saveSettings({
         passwordEnabled: true,
-        passwordHash: await hashPassword(password),
+        password,
       });
       sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       await boot();
@@ -466,7 +464,7 @@ function bindEvents(state) {
         return;
       }
       await saveSettings({
-        passwordHash: await hashPassword(password),
+        password,
       });
       await boot();
       setPasswordStatus("Password changed.");
@@ -477,7 +475,7 @@ function bindEvents(state) {
   if (disableForm) {
     disableForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      await saveSettings({ passwordEnabled: false, passwordHash: null });
+      await saveSettings({ passwordEnabled: false, password: "" });
       lockOptions();
       await boot();
       setPasswordStatus("Password disabled.");

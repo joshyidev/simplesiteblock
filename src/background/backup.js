@@ -98,7 +98,7 @@ function importSettings(settings, password) {
 
   const passwordSettings =
     password === undefined
-      ? { passwordEnabled: false, passwordHash: null }
+      ? { passwordEnabled: false, password: "" }
       : importPasswordSettings(password);
 
   return {
@@ -114,7 +114,7 @@ function exportPasswordSettings(settings) {
   const enabled = Boolean(settings.passwordEnabled);
   return {
     passwordEnabled: enabled,
-    passwordHash: enabled ? settings.passwordHash || null : null,
+    password: enabled ? String(settings.password || "") : "",
   };
 }
 
@@ -124,14 +124,14 @@ function importPasswordSettings(password) {
   }
   const passwordEnabled = Boolean(password.passwordEnabled);
   if (!passwordEnabled) {
-    return { passwordEnabled: false, passwordHash: null };
+    return { passwordEnabled: false, password: "" };
   }
-  if (!isPasswordHash(password.passwordHash)) {
-    throw new Error("Password hash is missing or invalid.");
+  if (typeof password.password !== "string" || password.password === "") {
+    throw new Error("Password is missing or invalid.");
   }
   return {
     passwordEnabled: true,
-    passwordHash: { ...password.passwordHash },
+    password: password.password,
   };
 }
 
@@ -186,19 +186,6 @@ function validUpdateInterval(value) {
 
 function validRuleCount(value) {
   return Number.isInteger(value) && value >= 0;
-}
-
-function isPasswordHash(value) {
-  return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    value.algo === "PBKDF2-SHA-256" &&
-    typeof value.salt === "string" &&
-    typeof value.hash === "string" &&
-    Number.isInteger(value.iterations) &&
-    value.iterations > 0
-  );
 }
 
 function hasEnabledListWithoutRawText({ lists }) {

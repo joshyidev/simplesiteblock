@@ -9,10 +9,7 @@ export function lockOptions() {
   sessionStorage.removeItem("simpleSiteBlockUnlocked");
 }
 
-export function renderLock(
-  container,
-  { verifyPassword, settings, onUnlocked },
-) {
+export function renderLock(container, { settings, onUnlocked }) {
   container.hidden = false;
   container.innerHTML = `
     <div class="section-header lock-header">
@@ -35,8 +32,7 @@ export function renderLock(
     .addEventListener("submit", async (event) => {
       event.preventDefault();
       const password = container.querySelector("#unlockPassword").value;
-      const ok = await verifyPassword(password, settings.passwordHash);
-      if (!ok) {
+      if (password !== settings.password) {
         container.querySelector("#lockStatus").textContent =
           "Incorrect password.";
         return;

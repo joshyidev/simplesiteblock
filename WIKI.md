@@ -3,10 +3,6 @@
 Like the name suggests, SimpleSiteBlock is a simple site blocker for blocking distracting sites. It is not an ad blocker. It does not filter page resources, hide page elements, or modify requests after a page has
 loaded.
 
-The extension builds one compiled index from enabled lists and custom rules.
-Allow rules are checked before block rules, so an allow rule can override a
-matching block rule.
-
 ## Lists
 
 Use **Update All** to fetch lists and rebuild the compiled index. When list

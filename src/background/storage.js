@@ -4,7 +4,7 @@ import { extensionApi as ext } from "../extension_api.js";
 export const DEFAULT_SETTINGS = Object.freeze({
   blockAction: "show_block_page",
   passwordEnabled: false,
-  passwordHash: null,
+  password: "",
   lastUnlockAt: 0,
   updateIntervalDays: 7,
 });
