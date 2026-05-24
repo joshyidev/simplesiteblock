@@ -1,4 +1,3 @@
-import { evaluate, hydrateIndex } from "../background/engine.js";
 import {
   createSettingsExport,
   importSettingsBackup,
@@ -26,7 +25,10 @@ let editingListId = null;
 void boot();
 
 async function boot() {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   if (!isOptionsUnlocked(state.settings)) {
     shell.classList.add("is-locked");
     app.hidden = true;
@@ -44,7 +46,7 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const totalRules = countRules(state.compiledIndex);
+  const totalRules = state.indexStats.total;
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
 
@@ -177,8 +179,8 @@ function renderApp(state) {
 
   const listsMeta = app.querySelector("#listsMeta");
   if (listsMeta) {
-    const builtAt = state.compiledIndex?.builtAt
-      ? new Date(state.compiledIndex.builtAt).toLocaleString()
+    const builtAt = state.indexStats.builtAt
+      ? new Date(state.indexStats.builtAt).toLocaleString()
       : "Never";
     listsMeta.textContent = `${totalRules.toLocaleString()} total rules · Index built ${builtAt}`;
   }
@@ -523,7 +525,10 @@ function bindEvents(state) {
     setIndexControlsDisabled(true);
     try {
       await importSettingsBackup(await file.text());
-      const nextState = await getState();
+      const nextState = await getState({
+        includeRawLists: false,
+        includeCompiledIndex: false,
+      });
       if (nextState.settings.passwordEnabled) {
         sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       } else {
@@ -543,9 +548,22 @@ function bindEvents(state) {
     const input = app.querySelector("#testUrl");
     const url = normalizeTestUrl(input.value);
     input.value = url;
-    const { compiledIndex } = await getState();
-    const verdict = evaluate(url, hydrateIndex(compiledIndex));
     const output = app.querySelector("#testVerdict");
+
+    // Ask the background worker, which already holds the compiled index in
+    // memory, rather than deserializing the whole index into this page.
+    let verdict;
+    try {
+      verdict = await ext.runtime.sendMessage({ type: "ssb:verdict", url });
+    } catch {
+      verdict = null;
+    }
+    if (!verdict) {
+      output.textContent = "Test unavailable. Try again in a moment.";
+      output.classList.remove("is-blocked", "is-allowed");
+      return;
+    }
+
     output.textContent = verdict.blocked
       ? `Blocked: ${verdict.reason}`
       : "Allowed";
@@ -610,15 +628,6 @@ function setIndexControlsDisabled(disabled) {
 function exportFileName() {
   const date = new Date().toISOString().slice(0, 10);
   return `simplesiteblock-settings-${date}.txt`;
-}
-
-function countRules(index) {
-  return (
-    (index.hostBlocksExact?.length || 0) +
-    (index.hostAllowsExact?.length || 0) +
-    (index.hostBlocksSubtree?.length || 0) +
-    (index.hostAllowsSubtree?.length || 0)
-  );
 }
 
 function normalizeTestUrl(value) {

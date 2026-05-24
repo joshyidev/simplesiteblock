@@ -16,6 +16,15 @@ export function hydrateIndex(serialized = EMPTY_SERIALIZED_INDEX) {
   };
 }
 
+export function countIndexRules(index = EMPTY_SERIALIZED_INDEX) {
+  return (
+    (index.hostBlocksExact?.length || 0) +
+    (index.hostAllowsExact?.length || 0) +
+    (index.hostBlocksSubtree?.length || 0) +
+    (index.hostAllowsSubtree?.length || 0)
+  );
+}
+
 export function serializeIndex(index) {
   return {
     hostBlocksExact: [...(index.hostBlocksExact || [])].sort(),

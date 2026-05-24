@@ -220,7 +220,7 @@ export async function updateListNow(listId, { compile = true } = {}) {
 export async function compileAndStoreIndex() {
   if (compilePromise) return compilePromise;
 
-  const state = await getState();
+  const state = await getState({ includeCompiledIndex: false });
   const parsedLists = [];
   if (state.customRules.trim())
     parsedLists.push(parseCustomRules(state.customRules));

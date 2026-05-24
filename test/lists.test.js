@@ -474,6 +474,19 @@ test("updateCustomRules validates and saves rules", async () => {
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
     const indexWrite = written.find((w) => "compiledIndex" in w);
     assert.ok(indexWrite, "compiledIndex should have been recompiled");
+    assert.ok(
+      "indexStats" in indexWrite,
+      "compiled index write should include indexStats summary",
+    );
+    assert.equal(
+      indexWrite.indexStats.total,
+      2,
+      "indexStats total should count the compiled rules",
+    );
+    assert.ok(
+      indexWrite.indexStats.builtAt > 0,
+      "indexStats should carry the build timestamp",
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
