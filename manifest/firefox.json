@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SimpleSiteBlock",
-  "description": "Block sites from hosts-file and Adblock-syntax lists.",
-  "version": "1.0.0",
+  "description": "SimpleSiteBlock is a simple site blocker for blocking distracting sites.",
+  "version": "0.0.1",
   "permissions": [
     "webNavigation",
     "tabs",
