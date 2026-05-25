@@ -1,14 +1,20 @@
-import { createCombinedIndex } from "./engine.js";
+import {
+  createIndexAccumulator,
+  mergeParsedIntoIndex,
+  serializeIndex,
+} from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
 import {
+  getRawList,
   getState,
+  removeRawList,
   saveCompiledIndex,
   saveCustomRules,
   saveLists,
   savePendingRebuild,
-  saveRawLists,
+  saveRawList,
 } from "./storage.js";
 
 export const ALARM_NAME = "update:index";
@@ -16,10 +22,14 @@ const MAX_CONTENT_LENGTH_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
 
+let updateAllPromise = null;
 let compilePromise = null;
 
 export async function addList({ name, url }) {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const normalizedUrl = normalizeListUrl(url);
   if (
     state.lists.some(
@@ -62,16 +72,20 @@ function normalizeStoredListUrl(value) {
 }
 
 export async function removeList(listId) {
-  const state = await getState();
-  const rawLists = { ...state.rawLists };
-  delete rawLists[listId];
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   await saveLists(state.lists.filter((list) => list.id !== listId));
-  await saveRawLists(rawLists);
+  await removeRawList(listId);
   await savePendingRebuild(true);
 }
 
 export async function updateListIdentity(listId, { name, url }) {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
 
@@ -103,15 +117,16 @@ export async function updateListIdentity(listId, { name, url }) {
   await saveLists(lists);
   if (!urlChanged) return lists;
 
-  const rawLists = { ...state.rawLists };
-  delete rawLists[listId];
-  await saveRawLists(rawLists);
+  await removeRawList(listId);
   await savePendingRebuild(true);
   return lists;
 }
 
 export async function updateListSettings(listId, patch) {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const lists = state.lists.map((list) =>
     list.id === listId ? { ...list, ...patch } : list,
   );
@@ -120,34 +135,57 @@ export async function updateListSettings(listId, patch) {
 }
 
 export async function updateAllLists() {
-  const state = await getState();
+  if (updateAllPromise) return updateAllPromise;
+  updateAllPromise = doUpdateAllLists();
+  try {
+    return await updateAllPromise;
+  } finally {
+    updateAllPromise = null;
+  }
+}
+
+async function doUpdateAllLists() {
+  await fetchAndStoreEnabledLists();
+  await compileAndStoreIndex();
+}
+
+async function fetchAndStoreEnabledLists() {
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const enabledLists = state.lists.filter((list) => list.enabled);
   const fetchResults = new Map();
 
   await Promise.allSettled(
     enabledLists.map(async (list) => {
       try {
+        const cachedText = await getRawList(list.id);
         const result = await fetchList(list, {
-          hasCachedBody: Boolean(state.rawLists[list.id]),
+          hasCachedBody: cachedText !== null,
         });
-        if (result.notModified && !state.rawLists[list.id]) {
+        if (result.notModified && cachedText === null) {
           throw new Error("Server returned not modified but no cached body.");
         }
-        fetchResults.set(list.id, { ok: true, result });
+        if (!result.notModified) await saveRawList(list.id, result.text);
+        fetchResults.set(list.id, {
+          ok: true,
+          result: {
+            etag: result.etag,
+            lastModified: result.lastModified,
+          },
+        });
       } catch (error) {
         fetchResults.set(list.id, { ok: false, error });
       }
     }),
   );
 
-  const now = Date.now();
-  const rawLists = { ...state.rawLists };
   const lists = state.lists.map((list) => {
     const outcome = fetchResults.get(list.id);
     if (!outcome) return list;
     if (!outcome.ok) return { ...list, lastError: outcome.error.message };
     const { result } = outcome;
-    if (!result.notModified) rawLists[list.id] = result.text;
     return {
       ...list,
       lastError: null,
@@ -157,8 +195,6 @@ export async function updateAllLists() {
   });
 
   await saveLists(lists);
-  await saveRawLists(rawLists);
-  await compileAndStoreIndex();
 }
 
 export async function updateCustomRules(rawRules) {
@@ -169,23 +205,25 @@ export async function updateCustomRules(rawRules) {
 }
 
 export async function updateListNow(listId, { compile = true } = {}) {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
 
   try {
+    const cachedText = await getRawList(listId);
     const result = await fetchList(target, {
-      hasCachedBody: Boolean(state.rawLists[listId]),
+      hasCachedBody: cachedText !== null,
     });
-    if (result.notModified && !state.rawLists[listId]) {
+    if (result.notModified && cachedText === null) {
       throw new Error(
         "The server returned not modified, but no cached list body is available.",
       );
     }
-    const parsed = result.notModified
-      ? parseListText(state.rawLists[listId], target.format)
-      : parseListText(result.text, target.format);
-    const now = Date.now();
+    const text = result.notModified ? cachedText : result.text;
+    const parsed = parseListText(text, target.format);
     const lists = state.lists.map((list) =>
       list.id === listId
         ? {
@@ -198,11 +236,9 @@ export async function updateListNow(listId, { compile = true } = {}) {
         : list,
     );
 
-    const rawLists = { ...state.rawLists };
-    if (!result.notModified) rawLists[listId] = result.text;
+    if (!result.notModified) await saveRawList(listId, result.text);
 
     await saveLists(lists);
-    await saveRawLists(rawLists);
     if (compile) {
       await compileAndStoreIndex();
     } else {
@@ -219,28 +255,45 @@ export async function updateListNow(listId, { compile = true } = {}) {
 
 export async function compileAndStoreIndex() {
   if (compilePromise) return compilePromise;
+  compilePromise = doCompileAndStoreIndex();
+  try {
+    return await compilePromise;
+  } finally {
+    compilePromise = null;
+  }
+}
 
-  const state = await getState({ includeCompiledIndex: false });
-  const parsedLists = [];
-  if (state.customRules.trim())
-    parsedLists.push(parseCustomRules(state.customRules));
+async function doCompileAndStoreIndex() {
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
+  const index = createIndexAccumulator();
+  if (state.customRules.trim()) {
+    mergeParsedIntoIndex(index, parseCustomRules(state.customRules));
+  }
 
-  const lists = state.lists.map((list) => {
-    if (!list.enabled || !state.rawLists[list.id]) return list;
+  const lists = [];
+  for (const list of state.lists) {
+    const text = list.enabled ? await getRawList(list.id) : null;
+    if (!list.enabled || text === null) {
+      lists.push(list);
+      continue;
+    }
     try {
-      const parsed = parseListText(state.rawLists[list.id], list.format);
-      parsedLists.push(parsed);
-      return {
+      const parsed = parseListText(text, list.format);
+      mergeParsedIntoIndex(index, parsed);
+      lists.push({
         ...list,
         ruleCount: countRules(parsed),
         lastError: null,
-      };
+      });
     } catch (error) {
-      return { ...list, ruleCount: 0, lastError: error.message };
+      lists.push({ ...list, ruleCount: 0, lastError: error.message });
     }
-  });
+  }
 
-  const compiledIndex = createCombinedIndex(parsedLists);
+  const compiledIndex = serializeIndex(index);
   await saveCompiledIndex(compiledIndex);
   await saveLists(lists);
   return compiledIndex;
@@ -248,7 +301,10 @@ export async function compileAndStoreIndex() {
 
 export async function reconcileAlarms() {
   if (!ext.alarms) return;
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const periodInMinutes =
     clampInterval(state.settings.updateIntervalDays) * 1440;
   const existing = await ext.alarms.get(ALARM_NAME);

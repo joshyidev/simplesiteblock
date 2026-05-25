@@ -41,27 +41,27 @@ export function countIndexRules(index = EMPTY_SERIALIZED_INDEX) {
   );
 }
 
-export function createCombinedIndex(parsedLists) {
-  const combined = {
+export function createIndexAccumulator() {
+  return {
     hostBlocksExact: new Set(),
     hostAllowsExact: new Set(),
     hostBlocksSubtree: new Set(),
     hostAllowsSubtree: new Set(),
     builtAt: Date.now(),
   };
+}
 
-  for (const parsed of parsedLists) {
-    for (const host of parsed.hostBlocksExact || [])
-      combined.hostBlocksExact.add(host);
-    for (const host of parsed.hostAllowsExact || [])
-      combined.hostAllowsExact.add(host);
-    for (const host of parsed.hostBlocksSubtree || [])
-      combined.hostBlocksSubtree.add(host);
-    for (const host of parsed.hostAllowsSubtree || [])
-      combined.hostAllowsSubtree.add(host);
-  }
-
-  return serializeIndex(combined);
+// Merge one parsed list at a time so compile does not keep every parsed list's
+// Sets alive until final serialization.
+export function mergeParsedIntoIndex(index, parsed) {
+  for (const host of parsed.hostBlocksExact || [])
+    index.hostBlocksExact.add(host);
+  for (const host of parsed.hostAllowsExact || [])
+    index.hostAllowsExact.add(host);
+  for (const host of parsed.hostBlocksSubtree || [])
+    index.hostBlocksSubtree.add(host);
+  for (const host of parsed.hostAllowsSubtree || [])
+    index.hostAllowsSubtree.add(host);
 }
 
 export function evaluate(url, index) {

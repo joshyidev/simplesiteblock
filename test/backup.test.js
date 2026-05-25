@@ -6,6 +6,7 @@ import {
   parseSettingsImport,
 } from "../src/background/backup.js";
 import { evaluate, hydrateIndex } from "../src/background/engine.js";
+import { rawListStorageKey } from "../src/background/storage.js";
 
 function makeState() {
   return {
@@ -160,6 +161,11 @@ test("settings import rebuilds compiled index from custom rules", async () => {
         async set(patch) {
           Object.assign(store, patch);
         },
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            delete store[key];
+          }
+        },
       },
     },
     alarms: {
@@ -211,6 +217,11 @@ test("settings import marks URL-only lists pending", async () => {
         async set(patch) {
           Object.assign(store, patch);
         },
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            delete store[key];
+          }
+        },
       },
     },
     alarms: {
@@ -229,6 +240,67 @@ test("settings import marks URL-only lists pending", async () => {
       true,
     );
     assert.equal(evaluate("https://ads.example", index).blocked, false);
+    assert.equal(store.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("settings import clears cached raw list bodies", async () => {
+  const originalChrome = globalThis.chrome;
+  const store = {
+    lists: [
+      {
+        id: "list-1",
+        name: "Old",
+        url: "https://example.com/old.txt",
+        enabled: true,
+      },
+    ],
+    [rawListStorageKey("list-1")]: "0.0.0.0 stale.example",
+  };
+  const removed = [];
+  const payload = makePayload({
+    lists: [
+      {
+        id: "list-1",
+        name: "New",
+        url: "https://example.com/new.txt",
+        format: "hosts",
+        enabled: true,
+      },
+    ],
+    customRules: "||tracker.example^",
+  });
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get(defaults) {
+          return { ...defaults, ...store };
+        },
+        async set(patch) {
+          Object.assign(store, patch);
+        },
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            removed.push(key);
+            delete store[key];
+          }
+        },
+      },
+    },
+    alarms: {
+      get: async () => undefined,
+      clear: async () => {},
+      create: () => {},
+    },
+  };
+
+  try {
+    await importSettingsBackup(JSON.stringify(payload));
+    assert.deepEqual(removed, [rawListStorageKey("list-1")]);
+    assert.equal(rawListStorageKey("list-1") in store, false);
     assert.equal(store.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;

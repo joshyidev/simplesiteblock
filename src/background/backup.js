@@ -4,7 +4,12 @@ import {
   parseCustomRules,
   reconcileAlarms,
 } from "./lists.js";
-import { DEFAULT_SETTINGS, savePendingRebuild } from "./storage.js";
+import {
+  DEFAULT_SETTINGS,
+  getState,
+  removeRawList,
+  savePendingRebuild,
+} from "./storage.js";
 import { extensionApi as ext } from "../extension_api.js";
 
 const EXPORT_APP = "SimpleSiteBlock";
@@ -62,11 +67,22 @@ export function parseSettingsImport(text) {
 }
 
 export async function importSettingsBackup(text) {
+  const existing = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const imported = parseSettingsImport(text);
+  const rawListIdsToClear = new Set([
+    ...existing.lists.map((list) => list.id),
+    ...imported.lists.map((list) => list.id),
+  ]);
+  await Promise.all(
+    [...rawListIdsToClear].map((listId) => removeRawList(listId)),
+  );
   await ext.storage.local.set({
     settings: imported.settings,
     lists: imported.lists,
-    rawLists: imported.rawLists,
+    rawLists: {},
     customRules: imported.customRules,
   });
   await compileAndStoreIndex();

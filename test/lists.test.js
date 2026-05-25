@@ -3,6 +3,7 @@ import test from "node:test";
 import { evaluate, hydrateIndex, serializeIndex } from "../src/background/engine.js";
 import {
   addList,
+  compileAndStoreIndex,
   normalizeListUrl,
   parseCustomRules,
   parseListText,
@@ -13,6 +14,7 @@ import {
   updateListIdentity,
   updateListSettings,
 } from "../src/background/lists.js";
+import { rawListStorageKey } from "../src/background/storage.js";
 
 test("list parser automatically detects hosts or adblock format", () => {
   const hosts = parseListText("0.0.0.0 ads.example\n127.0.0.1 tracker.example");
@@ -153,7 +155,11 @@ function makeChromeMock({
     },
     pendingRebuild: false,
   };
+  for (const [listId, text] of Object.entries(rawLists)) {
+    store[rawListStorageKey(listId)] = text;
+  }
   const written = [];
+  const removed = [];
   return {
     chrome: {
       storage: {
@@ -168,6 +174,12 @@ function makeChromeMock({
             written.push({ ...patch });
             Object.assign(store, patch);
           },
+          async remove(keys) {
+            for (const key of Array.isArray(keys) ? keys : [keys]) {
+              removed.push(key);
+              delete store[key];
+            }
+          },
         },
       },
       alarms: {
@@ -177,6 +189,7 @@ function makeChromeMock({
       },
     },
     written,
+    removed,
     store,
   };
 }
@@ -243,7 +256,7 @@ test("updateListIdentity changes name without clearing cached list body", async 
     assert.equal(store.lists[0].lastModified, "Wed, 01 Jan 2025 00:00:00 GMT");
     assert.equal(store.lists[0].lastError, "previous error");
     assert.equal(store.lists[0].ruleCount, 12);
-    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example");
+    assert.equal(store[rawListStorageKey("abc")], "0.0.0.0 ads.example");
     assert.equal(written.some((w) => "rawLists" in w), false);
     assert.equal(written.some((w) => "pendingRebuild" in w), false);
   } finally {
@@ -253,7 +266,7 @@ test("updateListIdentity changes name without clearing cached list body", async 
 
 test("updateListIdentity changes URL, clears cached body, and marks pending", async () => {
   const originalChrome = globalThis.chrome;
-  const { chrome, written, store } = makeChromeMock({
+  const { chrome, removed, store, written } = makeChromeMock({
     lists: [
       {
         id: "abc",
@@ -282,9 +295,8 @@ test("updateListIdentity changes URL, clears cached body, and marks pending", as
     assert.equal(store.lists[0].lastModified, null);
     assert.equal(store.lists[0].lastError, null);
     assert.equal(store.lists[0].ruleCount, 0);
-    assert.equal("abc" in store.rawLists, false);
-    const rawWrite = written.find((w) => "rawLists" in w);
-    assert.ok(rawWrite, "rawLists should have been saved");
+    assert.equal(rawListStorageKey("abc") in store, false);
+    assert.deepEqual(removed, [rawListStorageKey("abc")]);
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
     assert.ok(pendingWrite, "pendingRebuild should be set");
     assert.equal(pendingWrite.pendingRebuild, true);
@@ -386,7 +398,10 @@ test("updateAllLists fetches full body when validators exist without cached body
     await updateAllLists();
     assert.equal(requestHeaders["If-None-Match"], undefined);
     assert.equal(requestHeaders["If-Modified-Since"], undefined);
-    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example.com");
+    assert.equal(
+      store[rawListStorageKey("abc")],
+      "0.0.0.0 ads.example.com",
+    );
     assert.equal(store.lists[0].etag, '"fresh"');
     assert.equal(store.lists[0].lastError, null);
   } finally {
@@ -395,9 +410,95 @@ test("updateAllLists fetches full body when validators exist without cached body
   }
 });
 
-test("removeList removes the list and its raw content and marks pending", async () => {
+test("concurrent updateAllLists calls share one in-flight update", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const { chrome, written } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        enabled: true,
+      },
+    ],
+  });
+  let fetchCalls = 0;
+  let resolveFetch;
+  let markFetchStarted;
+  const fetchReleased = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve;
+  });
+
+  globalThis.chrome = chrome;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    markFetchStarted();
+    await fetchReleased;
+    return new Response("0.0.0.0 example.com", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const first = updateAllLists();
+    const second = updateAllLists();
+    await fetchStarted;
+    assert.equal(fetchCalls, 1);
+    resolveFetch();
+    await Promise.all([first, second]);
+    assert.equal(fetchCalls, 1);
+    assert.equal(
+      written.filter((w) => "compiledIndex" in w).length,
+      1,
+      "compiled index should be written once",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("concurrent compileAndStoreIndex calls share one in-flight compile", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, written } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 example.com" },
+  });
+  const originalGet = chrome.storage.local.get;
+  let getCalls = 0;
+  chrome.storage.local.get = async (...args) => {
+    getCalls += 1;
+    return originalGet(...args);
+  };
+  globalThis.chrome = chrome;
+
+  try {
+    await Promise.all([compileAndStoreIndex(), compileAndStoreIndex()]);
+    assert.equal(getCalls, 2);
+    assert.equal(
+      written.filter((w) => "compiledIndex" in w).length,
+      1,
+      "compiled index should be written once",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("removeList removes the list and its raw content and marks pending", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, removed, written } = makeChromeMock({
     lists: [
       {
         id: "abc",
@@ -415,9 +516,7 @@ test("removeList removes the list and its raw content and marks pending", async 
     const listWrite = written.find((w) => "lists" in w);
     assert.ok(listWrite, "lists should have been saved");
     assert.equal(listWrite.lists.length, 0);
-    const rawWrite = written.find((w) => "rawLists" in w);
-    assert.ok(rawWrite, "rawLists should have been saved");
-    assert.equal("abc" in rawWrite.rawLists, false);
+    assert.deepEqual(removed, [rawListStorageKey("abc")]);
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
     assert.ok(pendingWrite, "pendingRebuild should have been set");
     assert.equal(pendingWrite.pendingRebuild, true);

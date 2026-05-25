@@ -1,12 +1,7 @@
-import {
-  createSettingsExport,
-  importSettingsBackup,
-} from "../background/backup.js";
+import { createSettingsExport } from "../background/backup.js";
 import {
   addList,
   removeList,
-  updateAllLists,
-  updateCustomRules,
   updateListIdentity,
   updateListSettings,
 } from "../background/lists.js";
@@ -333,7 +328,10 @@ function bindEvents(state) {
       setCustomRulesStatus("Saving custom rules...");
       setIndexControlsDisabled(true);
       try {
-        await updateCustomRules(form.get("customRules"));
+        await runBackgroundCommand({
+          type: "ssb:update-custom-rules",
+          rawRules: form.get("customRules"),
+        });
         await boot();
         setCustomRulesStatus("Custom rules saved.");
       } catch (error) {
@@ -355,7 +353,7 @@ function bindEvents(state) {
     setListsStatus("Updating lists...");
     setIndexControlsDisabled(true);
     try {
-      await updateAllLists();
+      await runBackgroundCommand({ type: "ssb:update-all-lists" });
       await boot();
       setListsStatus("All lists updated.");
     } catch (error) {
@@ -524,7 +522,10 @@ function bindEvents(state) {
     setBackupStatus("Importing settings...");
     setIndexControlsDisabled(true);
     try {
-      await importSettingsBackup(await file.text());
+      await runBackgroundCommand({
+        type: "ssb:import-settings",
+        text: await file.text(),
+      });
       const nextState = await getState({
         includeRawLists: false,
         includeCompiledIndex: false,
@@ -577,6 +578,17 @@ function setListsStatus(message) {
   if (listsStatus) {
     listsStatus.textContent = message;
   }
+}
+
+async function runBackgroundCommand(message) {
+  let response;
+  try {
+    response = await ext.runtime.sendMessage(message);
+  } catch {
+    throw new Error("Background worker unavailable. Try again in a moment.");
+  }
+  if (response?.ok) return response;
+  throw new Error(response?.error || "Background worker unavailable.");
 }
 
 function setCustomRulesStatus(message) {

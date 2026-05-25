@@ -1,7 +1,14 @@
 import { evaluate } from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
+import { importSettingsBackup } from "./backup.js";
 import { ensureDefaults, getHydratedState } from "./storage.js";
-import { compileAndStoreIndex, handleAlarm, reconcileAlarms } from "./lists.js";
+import {
+  compileAndStoreIndex,
+  handleAlarm,
+  reconcileAlarms,
+  updateAllLists,
+  updateCustomRules,
+} from "./lists.js";
 
 const KEEP_ALIVE_INTERVAL_MS = 20000;
 
@@ -17,28 +24,39 @@ ext.alarms.onAlarm.addListener((alarm) => {
 });
 
 ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "ssb:verdict") return false;
-  void respondWithVerdict(message.url, sendResponse);
-  return true; // keep the channel open for the async response
+  if (message?.type === "ssb:verdict") {
+    void respondWithVerdict(message.url, sendResponse);
+    return true; // keep the channel open for the async response
+  }
+  if (message?.type === "ssb:update-all-lists") {
+    void respondWithCommand(() => updateAllLists(), sendResponse);
+    return true;
+  }
+  if (message?.type === "ssb:update-custom-rules") {
+    void respondWithCommand(
+      () => updateCustomRules(message.rawRules),
+      sendResponse,
+    );
+    return true;
+  }
+  if (message?.type === "ssb:import-settings") {
+    void respondWithCommand(
+      () => importSettingsBackup(message.text),
+      sendResponse,
+    );
+    return true;
+  }
+  return false;
 });
 
 ext.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (
-    changes.settings ||
-    changes.compiledIndex ||
-    changes.lists ||
-    changes.rawLists ||
-    changes.customRules
-  ) {
+  // Navigation only reads settings and the hydrated compiled index. Raw-list
+  // writes during updates should not rehydrate the whole index repeatedly.
+  if (changes.settings || changes.compiledIndex) {
     warmState();
   }
-  if (
-    changes.settings ||
-    changes.lists ||
-    changes.rawLists ||
-    changes.customRules
-  ) {
+  if (changes.settings || changes.lists || changes.customRules) {
     void reconcileAlarms();
   }
 });
@@ -84,6 +102,18 @@ async function respondWithVerdict(url, sendResponse) {
     sendResponse({ blocked: verdict.blocked, reason: verdict.reason });
   } catch {
     sendResponse(null);
+  }
+}
+
+async function respondWithCommand(command, sendResponse) {
+  try {
+    await command();
+    sendResponse({ ok: true });
+  } catch (error) {
+    sendResponse({
+      ok: false,
+      error: error?.message || "Something went wrong.",
+    });
   }
 }
 

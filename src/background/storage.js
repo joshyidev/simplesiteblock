@@ -6,6 +6,7 @@ import {
 import { extensionApi as ext } from "../extension_api.js";
 
 const EMPTY_INDEX_STATS = Object.freeze({ total: 0, builtAt: 0 });
+const RAW_LIST_PREFIX = "rawList:";
 
 function buildIndexStats(index) {
   return { total: countIndexRules(index), builtAt: index?.builtAt || 0 };
@@ -50,7 +51,7 @@ export async function ensureDefaults() {
 }
 
 export async function getState({
-  includeRawLists = true,
+  includeRawLists = false,
   includeCompiledIndex = true,
 } = {}) {
   const request = {
@@ -60,10 +61,10 @@ export async function getState({
     indexStats: null,
     pendingRebuild: false,
   };
-  // rawLists holds the full text of every list and compiledIndex holds every
-  // compiled host (both many MB for large lists). Only fetch them when a caller
-  // actually needs them, so the options page and navigation path do not pay to
-  // deserialize them. indexStats is a tiny summary used for display.
+  // compiledIndex holds every compiled host and can be many MB for large lists.
+  // Only fetch it when a caller actually needs it, so the options page does not
+  // pay to deserialize it. Cached raw list bodies are stored per-list; callers
+  // should use getRawList() instead of loading every body at once.
   if (includeRawLists) request.rawLists = {};
   if (includeCompiledIndex) request.compiledIndex = EMPTY_SERIALIZED_INDEX;
 
@@ -92,7 +93,10 @@ export async function getHydratedState() {
 }
 
 export async function saveSettings(settingsPatch) {
-  const state = await getState();
+  const state = await getState({
+    includeRawLists: false,
+    includeCompiledIndex: false,
+  });
   const settings = { ...state.settings, ...settingsPatch };
   await ext.storage.local.set({ settings });
   return settings;
@@ -103,9 +107,31 @@ export async function saveLists(lists) {
   return lists;
 }
 
-export async function saveRawLists(rawLists) {
-  await ext.storage.local.set({ rawLists });
-  return rawLists;
+export function rawListStorageKey(listId) {
+  return `${RAW_LIST_PREFIX}${listId}`;
+}
+
+export function isRawListStorageKey(key) {
+  return typeof key === "string" && key.startsWith(RAW_LIST_PREFIX);
+}
+
+export async function getRawList(listId) {
+  const key = rawListStorageKey(listId);
+  const stored = await ext.storage.local.get({ [key]: null });
+  return typeof stored[key] === "string" ? stored[key] : null;
+}
+
+export async function saveRawList(listId, text) {
+  await ext.storage.local.set({ [rawListStorageKey(listId)]: String(text) });
+}
+
+export async function removeRawList(listId) {
+  const key = rawListStorageKey(listId);
+  if (ext.storage.local.remove) {
+    await ext.storage.local.remove(key);
+    return;
+  }
+  await ext.storage.local.set({ [key]: null });
 }
 
 export async function saveCustomRules(customRules) {
