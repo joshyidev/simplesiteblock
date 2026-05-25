@@ -10,8 +10,8 @@ import {
 
 test("engine applies allow rules before block rules", () => {
   const index = hydrateIndex({
-    hostBlocksSubtree: ["example.com"],
-    hostAllowsSubtree: ["safe.example.com"],
+    hostBlocksSubtree: "example.com",
+    hostAllowsSubtree: "safe.example.com",
     builtAt: 1,
   });
 
@@ -22,11 +22,11 @@ test("engine applies allow rules before block rules", () => {
 
 test("engine treats exact host rules differently from subtree host rules", () => {
   const exact = hydrateIndex({
-    hostBlocksExact: ["example.com"],
+    hostBlocksExact: "example.com",
     builtAt: 1,
   });
   const subtree = hydrateIndex({
-    hostBlocksSubtree: ["example.com"],
+    hostBlocksSubtree: "example.com",
     builtAt: 1,
   });
 
@@ -46,10 +46,9 @@ test("compiled index can serialize and hydrate", () => {
   });
   const hydrated = hydrateIndex(serialized);
 
-  assert.deepEqual(serialized.hostBlocksExact, ["a.example", "b.example"]);
-  assert.deepEqual(serialized.hostBlocksSubtree, ["subtree.example"]);
-  assert.equal(Array.isArray(hydrated.hostBlocksExact), true);
-  assert.equal(Array.isArray(hydrated.hostBlocksSubtree), true);
+  // Buckets serialize to sorted, newline-joined strings.
+  assert.equal(serialized.hostBlocksExact, "a.example\nb.example");
+  assert.equal(serialized.hostBlocksSubtree, "subtree.example");
   assert.equal("regexBlocks" in serialized, false);
   assert.equal("regexAllows" in serialized, false);
   assert.equal(evaluate("https://b.example", hydrated).blocked, true);
@@ -57,11 +56,15 @@ test("compiled index can serialize and hydrate", () => {
   assert.equal(evaluate("https://x.subtree.example", hydrated).blocked, true);
 });
 
-test("host matching supports sorted arrays and empty indexes", () => {
-  assert.equal(matchesHostExact(["a.example", "b.example"], "B.EXAMPLE"), true);
-  assert.equal(matchesHostExact(["a.example", "b.example"], "c.example"), false);
+test("host matching is case-insensitive and handles empty buckets", () => {
+  const index = hydrateIndex({
+    hostBlocksExact: "a.example\nb.example",
+    hostBlocksSubtree: "example.com",
+  });
+  assert.equal(matchesHostExact(index.hostBlocksExact, "B.EXAMPLE"), true);
+  assert.equal(matchesHostExact(index.hostBlocksExact, "c.example"), false);
   assert.equal(
-    matchesHostSubtree(["example.com"], "deep.sub.example.com"),
+    matchesHostSubtree(index.hostBlocksSubtree, "deep.sub.example.com"),
     true,
   );
   assert.equal(matchesHostExact(undefined, "example.com"), false);
@@ -70,4 +73,15 @@ test("host matching supports sorted arrays and empty indexes", () => {
     evaluate("https://example.com", hydrateIndex({ builtAt: 1 })).blocked,
     false,
   );
+});
+
+test("packed bucket binary search distinguishes prefixes", () => {
+  // ab.com is a prefix of abc.com; the in-place comparison must not confuse
+  // them. Inputs must be sorted to match the binary search.
+  const index = hydrateIndex({ hostBlocksExact: "ab.com\nabc.com\nb.com" });
+  assert.equal(matchesHostExact(index.hostBlocksExact, "ab.com"), true);
+  assert.equal(matchesHostExact(index.hostBlocksExact, "abc.com"), true);
+  assert.equal(matchesHostExact(index.hostBlocksExact, "abcd.com"), false);
+  assert.equal(matchesHostExact(index.hostBlocksExact, "a.com"), false);
+  assert.equal(matchesHostExact(index.hostBlocksExact, "b.com"), true);
 });

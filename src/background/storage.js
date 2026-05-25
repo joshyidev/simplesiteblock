@@ -13,7 +13,10 @@ function buildIndexStats(index) {
 
 function normalizeIndexStats(stats) {
   if (stats && typeof stats === "object") {
-    return { total: Number(stats.total) || 0, builtAt: Number(stats.builtAt) || 0 };
+    return {
+      total: Number(stats.total) || 0,
+      builtAt: Number(stats.builtAt) || 0,
+    };
   }
   return EMPTY_INDEX_STATS;
 }
@@ -27,7 +30,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export async function ensureDefaults() {
-  const stored = await ext.storage.local.get(["settings", "lists", "customRules"]);
+  const stored = await ext.storage.local.get([
+    "settings",
+    "lists",
+    "customRules",
+  ]);
   const toWrite = {};
   if (!stored.settings || typeof stored.settings !== "object") {
     toWrite.settings = DEFAULT_SETTINGS;

@@ -100,6 +100,9 @@ async function handleNavigation(details) {
   const verdict = evaluate(details.url, state.index);
   if (!verdict.blocked) return;
 
+  // Incognito always closes: under spanning incognito mode an on-the-record
+  // extension page cannot load in an off-the-record tab, so navigating to
+  // blocked.html there fails with ERR_BLOCKED_BY_CLIENT.
   if (
     state.settings.blockAction === "close_tab" ||
     (await isIncognitoTab(details.tabId))
