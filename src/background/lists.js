@@ -1,6 +1,9 @@
 import { extensionApi as ext } from "../extension_api.js";
 import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
+import { normalizeHosts } from "./normalize.js";
+import { packRules } from "./packer.js";
+import { applyDynamicRules } from "./rules.js";
 import {
   getRawList,
   getState,
@@ -127,9 +130,45 @@ export async function updateAllLists() {
 
 async function doUpdateAllLists() {
   await fetchAndStoreEnabledLists();
-  // Raw bodies changed but no rules are applied yet (the DNR pipeline lands
-  // later); flag that a rebuild is owed.
-  await savePendingRebuild(true);
+  await rebuildRules();
+}
+
+// Rebuild the full dynamic rule set from cached list bodies plus custom rules
+// and apply it. Sets pendingRebuild when an enabled list has no cached body yet
+// (it needs a fetch before it can contribute rules).
+export async function rebuildRules() {
+  const state = await getState({ includeRawLists: false });
+  const block = new Set();
+  const allow = new Set();
+  let pending = false;
+
+  if (state.customRules.trim()) {
+    addParsedHosts(parseCustomRules(state.customRules), block, allow);
+  }
+
+  for (const list of state.lists) {
+    if (!list.enabled) continue;
+    const text = await getRawList(list.id);
+    if (text === null) {
+      pending = true;
+      continue;
+    }
+    try {
+      addParsedHosts(parseListText(text, list.format), block, allow);
+    } catch {
+      // Invalid cached body; the list's lastError is tracked at fetch time.
+    }
+  }
+
+  await applyDynamicRules(
+    packRules(normalizeHosts(block), normalizeHosts(allow)),
+  );
+  await savePendingRebuild(pending);
+}
+
+function addParsedHosts(parsed, block, allow) {
+  for (const host of parsed.block) block.add(host);
+  for (const host of parsed.allow) allow.add(host);
 }
 
 async function fetchAndStoreEnabledLists() {
@@ -184,7 +223,7 @@ export async function updateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
   parseCustomRules(customRules);
   await saveCustomRules(customRules);
-  await savePendingRebuild(true);
+  await rebuildRules();
 }
 
 function countParsedText(text, format) {

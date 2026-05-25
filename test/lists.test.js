@@ -517,9 +517,11 @@ test("updateCustomRules validates and saves rules", async () => {
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
     const indexWrite = written.find((w) => "compiledIndex" in w);
     assert.equal(indexWrite, undefined, "no compiled index is written");
+    // rebuildRules applies immediately, and with no enabled lists awaiting a
+    // fetch there is nothing left pending.
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should be set");
-    assert.equal(pendingWrite.pendingRebuild, true);
+    assert.ok(pendingWrite, "pendingRebuild should be written");
+    assert.equal(pendingWrite.pendingRebuild, false);
   } finally {
     globalThis.chrome = originalChrome;
   }

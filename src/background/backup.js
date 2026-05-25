@@ -1,14 +1,10 @@
 import {
   normalizeListUrl,
   parseCustomRules,
+  rebuildRules,
   reconcileAlarms,
 } from "./lists.js";
-import {
-  DEFAULT_SETTINGS,
-  getState,
-  removeRawList,
-  savePendingRebuild,
-} from "./storage.js";
+import { DEFAULT_SETTINGS, getState, removeRawList } from "./storage.js";
 import { extensionApi as ext } from "../extension_api.js";
 
 const EXPORT_APP = "SimpleSiteBlock";
@@ -80,8 +76,9 @@ export async function importSettingsBackup(text) {
     rawLists: {},
     customRules: imported.customRules,
   });
-  // Imported lists arrive without cached bodies, so rules are owed a rebuild.
-  await savePendingRebuild(true);
+  // Imported lists arrive without cached bodies; rebuild applies custom rules
+  // now and flags pendingRebuild until the lists are fetched.
+  await rebuildRules();
   await reconcileAlarms();
 }
 

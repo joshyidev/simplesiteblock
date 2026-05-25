@@ -38,26 +38,24 @@ body {
 }
 
 h1 {
-  margin: 0 0 20px;
+  margin: 0 0 16px;
   font-size: 30px;
 }
 
-dl {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 10px 14px;
-  margin: 0;
-}
-
-dt {
+.message {
+  margin: 0 0 24px;
   color: var(--muted);
-  font-weight: 700;
 }
 
-dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
+.settings-link {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
 }
 
 @media (prefers-color-scheme: dark) {
