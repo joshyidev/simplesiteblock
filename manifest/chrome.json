@@ -4,7 +4,6 @@
   "description": "SimpleSiteBlock is a simple site blocker for blocking distracting sites.",
   "version": "0.0.1",
   "permissions": [
-    "webNavigation",
     "storage",
     "unlimitedStorage",
     "alarms"

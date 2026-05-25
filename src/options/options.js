@@ -20,10 +20,7 @@ let editingListId = null;
 void boot();
 
 async function boot() {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   if (!isOptionsUnlocked(state.settings)) {
     shell.classList.add("is-locked");
     app.hidden = true;
@@ -41,7 +38,10 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const totalRules = state.indexStats.total;
+  const totalRules = state.lists.reduce(
+    (sum, list) => sum + Number(list.ruleCount || 0),
+    0,
+  );
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
 
@@ -129,18 +129,6 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <h2>Diagnostics</h2>
-        <div class="row">
-          <label class="field">
-            Test URL
-            <input id="testUrl" type="text" placeholder="example.com or https://example.com">
-          </label>
-          <button id="testUrlButton" class="fit" type="button">Test</button>
-        </div>
-        <output id="testVerdict" class="verdict">No test run.</output>
-      </section>
-
-      <section class="panel">
         <h2>Links</h2>
         <nav class="link-list" aria-label="Help and project links">
           <a href="https://github.com/joshyidev/simplesiteblock/wiki">Documentation</a>
@@ -165,10 +153,8 @@ function renderApp(state) {
 
   const listsMeta = app.querySelector("#listsMeta");
   if (listsMeta) {
-    const builtAt = state.indexStats.builtAt
-      ? new Date(state.indexStats.builtAt).toLocaleString()
-      : "Never";
-    listsMeta.textContent = `${totalRules.toLocaleString()} total rules · Index built ${builtAt}`;
+    const listCount = state.lists.length;
+    listsMeta.textContent = `${listCount} list${listCount === 1 ? "" : "s"} · ${totalRules.toLocaleString()} total rules`;
   }
 
   bindEvents(state);
@@ -510,10 +496,7 @@ function bindEvents(state) {
         type: "ssb:import-settings",
         text: await file.text(),
       });
-      const nextState = await getState({
-        includeRawLists: false,
-        includeCompiledIndex: false,
-      });
+      const nextState = await getState({ includeRawLists: false });
       if (nextState.settings.passwordEnabled) {
         sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       } else {
@@ -529,32 +512,6 @@ function bindEvents(state) {
     }
   });
 
-  app.querySelector("#testUrlButton").addEventListener("click", async () => {
-    const input = app.querySelector("#testUrl");
-    const url = normalizeTestUrl(input.value);
-    input.value = url;
-    const output = app.querySelector("#testVerdict");
-
-    // Ask the background worker, which already holds the compiled index in
-    // memory, rather than deserializing the whole index into this page.
-    let verdict;
-    try {
-      verdict = await ext.runtime.sendMessage({ type: "ssb:verdict", url });
-    } catch {
-      verdict = null;
-    }
-    if (!verdict) {
-      output.textContent = "Test unavailable. Try again in a moment.";
-      output.classList.remove("is-blocked", "is-allowed");
-      return;
-    }
-
-    output.textContent = verdict.blocked
-      ? `Blocked: ${verdict.reason}`
-      : "Allowed";
-    output.classList.toggle("is-blocked", verdict.blocked);
-    output.classList.toggle("is-allowed", !verdict.blocked);
-  });
 }
 
 function setListsStatus(message) {
@@ -606,7 +563,6 @@ function setIndexControlsDisabled(disabled) {
     "#saveCustomRulesButton",
     "#updateAllButton",
     "#importSettingsButton",
-    "#testUrlButton",
     ".list-enabled",
     ".edit-list",
     ".save-list-edit",
@@ -624,12 +580,6 @@ function setIndexControlsDisabled(disabled) {
 function exportFileName() {
   const date = new Date().toISOString().slice(0, 10);
   return `simplesiteblock-settings-${date}.txt`;
-}
-
-function normalizeTestUrl(value) {
-  const trimmed = value.trim();
-  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
 }
 
 function escapeHtml(value) {

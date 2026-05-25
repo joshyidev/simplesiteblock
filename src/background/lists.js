@@ -1,8 +1,3 @@
-import {
-  createIndexAccumulator,
-  mergeParsedIntoIndex,
-  serializeIndex,
-} from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
@@ -10,7 +5,6 @@ import {
   getRawList,
   getState,
   removeRawList,
-  saveCompiledIndex,
   saveCustomRules,
   saveLists,
   savePendingRebuild,
@@ -23,13 +17,9 @@ const MAX_TEXT_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
 
 let updateAllPromise = null;
-let compilePromise = null;
 
 export async function addList({ name, url }) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const normalizedUrl = normalizeListUrl(url);
   if (
     state.lists.some(
@@ -72,20 +62,14 @@ function normalizeStoredListUrl(value) {
 }
 
 export async function removeList(listId) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   await saveLists(state.lists.filter((list) => list.id !== listId));
   await removeRawList(listId);
   await savePendingRebuild(true);
 }
 
 export async function updateListIdentity(listId, { name, url }) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
 
@@ -123,10 +107,7 @@ export async function updateListIdentity(listId, { name, url }) {
 }
 
 export async function updateListSettings(listId, patch) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const lists = state.lists.map((list) =>
     list.id === listId ? { ...list, ...patch } : list,
   );
@@ -146,14 +127,13 @@ export async function updateAllLists() {
 
 async function doUpdateAllLists() {
   await fetchAndStoreEnabledLists();
-  await compileAndStoreIndex();
+  // Raw bodies changed but no rules are applied yet (the DNR pipeline lands
+  // later); flag that a rebuild is owed.
+  await savePendingRebuild(true);
 }
 
 async function fetchAndStoreEnabledLists() {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const enabledLists = state.lists.filter((list) => list.enabled);
   const fetchResults = new Map();
 
@@ -167,12 +147,14 @@ async function fetchAndStoreEnabledLists() {
         if (result.notModified && cachedText === null) {
           throw new Error("Server returned not modified but no cached body.");
         }
+        const text = result.notModified ? cachedText : result.text;
         if (!result.notModified) await saveRawList(list.id, result.text);
         fetchResults.set(list.id, {
           ok: true,
           result: {
             etag: result.etag,
             lastModified: result.lastModified,
+            ruleCount: countParsedText(text, list.format),
           },
         });
       } catch (error) {
@@ -191,6 +173,7 @@ async function fetchAndStoreEnabledLists() {
       lastError: null,
       etag: result.etag ?? list.etag,
       lastModified: result.lastModified ?? list.lastModified,
+      ruleCount: result.ruleCount ?? list.ruleCount,
     };
   });
 
@@ -201,110 +184,20 @@ export async function updateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
   parseCustomRules(customRules);
   await saveCustomRules(customRules);
-  return compileAndStoreIndex();
+  await savePendingRebuild(true);
 }
 
-export async function updateListNow(listId, { compile = true } = {}) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
-  const target = state.lists.find((list) => list.id === listId);
-  if (!target) throw new Error("List not found");
-
+function countParsedText(text, format) {
   try {
-    const cachedText = await getRawList(listId);
-    const result = await fetchList(target, {
-      hasCachedBody: cachedText !== null,
-    });
-    if (result.notModified && cachedText === null) {
-      throw new Error(
-        "The server returned not modified, but no cached list body is available.",
-      );
-    }
-    const text = result.notModified ? cachedText : result.text;
-    const parsed = parseListText(text, target.format);
-    const lists = state.lists.map((list) =>
-      list.id === listId
-        ? {
-            ...list,
-            ruleCount: countRules(parsed),
-            lastError: null,
-            etag: result.etag ?? list.etag,
-            lastModified: result.lastModified ?? list.lastModified,
-          }
-        : list,
-    );
-
-    if (!result.notModified) await saveRawList(listId, result.text);
-
-    await saveLists(lists);
-    if (compile) {
-      await compileAndStoreIndex();
-    } else {
-      await savePendingRebuild(true);
-    }
-  } catch (error) {
-    const lists = state.lists.map((list) =>
-      list.id === listId ? { ...list, lastError: error.message } : list,
-    );
-    await saveLists(lists);
-    throw error;
+    return countRules(parseListText(text, format));
+  } catch {
+    return 0;
   }
-}
-
-export async function compileAndStoreIndex() {
-  if (compilePromise) return compilePromise;
-  compilePromise = doCompileAndStoreIndex();
-  try {
-    return await compilePromise;
-  } finally {
-    compilePromise = null;
-  }
-}
-
-async function doCompileAndStoreIndex() {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
-  const index = createIndexAccumulator();
-  if (state.customRules.trim()) {
-    mergeParsedIntoIndex(index, parseCustomRules(state.customRules));
-  }
-
-  const lists = [];
-  for (const list of state.lists) {
-    const text = list.enabled ? await getRawList(list.id) : null;
-    if (!list.enabled || text === null) {
-      lists.push(list);
-      continue;
-    }
-    try {
-      const parsed = parseListText(text, list.format);
-      mergeParsedIntoIndex(index, parsed);
-      lists.push({
-        ...list,
-        ruleCount: countRules(parsed),
-        lastError: null,
-      });
-    } catch (error) {
-      lists.push({ ...list, ruleCount: 0, lastError: error.message });
-    }
-  }
-
-  const compiledIndex = serializeIndex(index);
-  await saveCompiledIndex(compiledIndex);
-  await saveLists(lists);
-  return compiledIndex;
 }
 
 export async function reconcileAlarms() {
   if (!ext.alarms) return;
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const periodInMinutes =
     clampInterval(state.settings.updateIntervalDays) * 1440;
   const existing = await ext.alarms.get(ALARM_NAME);
@@ -376,10 +269,8 @@ export function parseListText(text, format = "auto") {
 export function parseCustomRules(text) {
   if (!text.trim()) {
     return {
-      hostBlocksExact: new Set(),
-      hostAllowsExact: new Set(),
-      hostBlocksSubtree: new Set(),
-      hostAllowsSubtree: new Set(),
+      block: new Set(),
+      allow: new Set(),
       warnings: [],
       detectedFormat: "adblock",
     };
@@ -398,10 +289,8 @@ export function parseCustomRules(text) {
 
 function asHostsParsed(parsed, detectedFormat) {
   return {
-    hostBlocksExact: parsed.hosts,
-    hostAllowsExact: new Set(),
-    hostBlocksSubtree: new Set(),
-    hostAllowsSubtree: new Set(),
+    block: parsed.hosts,
+    allow: new Set(),
     warnings: parsed.warnings,
     mappingLineCount: parsed.mappingLineCount || 0,
     detectedFormat,
@@ -409,12 +298,7 @@ function asHostsParsed(parsed, detectedFormat) {
 }
 
 function countRules(parsed) {
-  return (
-    (parsed.hostBlocksExact?.size || 0) +
-    (parsed.hostAllowsExact?.size || 0) +
-    (parsed.hostBlocksSubtree?.size || 0) +
-    (parsed.hostAllowsSubtree?.size || 0)
-  );
+  return (parsed.block?.size || 0) + (parsed.allow?.size || 0);
 }
 
 function looksLikeHtmlDocument(text) {

@@ -1,26 +1,6 @@
-import {
-  EMPTY_SERIALIZED_INDEX,
-  countIndexRules,
-  hydrateIndex,
-} from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
 
-const EMPTY_INDEX_STATS = Object.freeze({ total: 0, builtAt: 0 });
 const RAW_LIST_PREFIX = "rawList:";
-
-function buildIndexStats(index) {
-  return { total: countIndexRules(index), builtAt: index?.builtAt || 0 };
-}
-
-function normalizeIndexStats(stats) {
-  if (stats && typeof stats === "object") {
-    return {
-      total: Number(stats.total) || 0,
-      builtAt: Number(stats.builtAt) || 0,
-    };
-  }
-  return EMPTY_INDEX_STATS;
-}
 
 export const DEFAULT_SETTINGS = Object.freeze({
   passwordEnabled: false,
@@ -46,26 +26,19 @@ export async function ensureDefaults() {
   if (!Array.isArray(stored.lists)) toWrite.lists = [];
   if (typeof stored.customRules !== "string") toWrite.customRules = "";
   if (Object.keys(toWrite).length > 0) await ext.storage.local.set(toWrite);
-  return getState({ includeRawLists: false, includeCompiledIndex: false });
+  return getState({ includeRawLists: false });
 }
 
-export async function getState({
-  includeRawLists = false,
-  includeCompiledIndex = true,
-} = {}) {
+export async function getState({ includeRawLists = false } = {}) {
   const request = {
     settings: DEFAULT_SETTINGS,
     lists: [],
     customRules: "",
-    indexStats: null,
     pendingRebuild: false,
   };
-  // compiledIndex holds every compiled host and can be many MB for large lists.
-  // Only fetch it when a caller actually needs it, so the options page does not
-  // pay to deserialize it. Cached raw list bodies are stored per-list; callers
-  // should use getRawList() instead of loading every body at once.
+  // Cached raw list bodies are stored per-list; callers should use getRawList()
+  // instead of loading every body at once.
   if (includeRawLists) request.rawLists = {};
-  if (includeCompiledIndex) request.compiledIndex = EMPTY_SERIALIZED_INDEX;
 
   const stored = await ext.storage.local.get(request);
 
@@ -78,24 +51,12 @@ export async function getState({
         : {},
     customRules:
       typeof stored.customRules === "string" ? stored.customRules : "",
-    compiledIndex: includeCompiledIndex
-      ? stored.compiledIndex || EMPTY_SERIALIZED_INDEX
-      : EMPTY_SERIALIZED_INDEX,
-    indexStats: normalizeIndexStats(stored.indexStats),
     pendingRebuild: Boolean(stored.pendingRebuild),
   };
 }
 
-export async function getHydratedState() {
-  const state = await getState({ includeRawLists: false });
-  return { ...state, index: hydrateIndex(state.compiledIndex) };
-}
-
 export async function saveSettings(settingsPatch) {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   const settings = { ...state.settings, ...settingsPatch };
   await ext.storage.local.set({ settings });
   return settings;
@@ -136,15 +97,6 @@ export async function removeRawList(listId) {
 export async function saveCustomRules(customRules) {
   await ext.storage.local.set({ customRules });
   return customRules;
-}
-
-export async function saveCompiledIndex(compiledIndex) {
-  await ext.storage.local.set({
-    compiledIndex,
-    indexStats: buildIndexStats(compiledIndex),
-    pendingRebuild: false,
-  });
-  return compiledIndex;
 }
 
 export async function savePendingRebuild(pending) {

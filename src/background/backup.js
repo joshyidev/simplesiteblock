@@ -1,5 +1,4 @@
 import {
-  compileAndStoreIndex,
   normalizeListUrl,
   parseCustomRules,
   reconcileAlarms,
@@ -66,10 +65,7 @@ export function parseSettingsImport(text) {
 }
 
 export async function importSettingsBackup(text) {
-  const existing = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const existing = await getState({ includeRawLists: false });
   const imported = parseSettingsImport(text);
   const rawListIdsToClear = new Set([
     ...existing.lists.map((list) => list.id),
@@ -84,8 +80,8 @@ export async function importSettingsBackup(text) {
     rawLists: {},
     customRules: imported.customRules,
   });
-  await compileAndStoreIndex();
-  await savePendingRebuild(hasEnabledListWithoutRawText(imported));
+  // Imported lists arrive without cached bodies, so rules are owed a rebuild.
+  await savePendingRebuild(true);
   await reconcileAlarms();
 }
 
@@ -190,8 +186,4 @@ function validUpdateInterval(value) {
 
 function validRuleCount(value) {
   return Number.isInteger(value) && value >= 0;
-}
-
-function hasEnabledListWithoutRawText({ lists }) {
-  return lists.some((list) => list.enabled);
 }

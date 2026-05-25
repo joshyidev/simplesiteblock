@@ -3,12 +3,13 @@ import { normalizeHostname } from "./hosts.js";
 const UNSUPPORTED_OPTION_RE =
   /\$(?:csp|rewrite|removeparam|redirect|replace|permissions)=/i;
 
+// Every matched rule maps to subtree semantics under DNR (a host matches itself
+// and all subdomains), so bare-domain and ||host^ rules collapse into one block
+// set and one allow set. See DNR.md "Matching model".
 export function parseAdblock(rawText) {
   const output = {
-    hostBlocksExact: new Set(),
-    hostAllowsExact: new Set(),
-    hostBlocksSubtree: new Set(),
-    hostAllowsSubtree: new Set(),
+    block: new Set(),
+    allow: new Set(),
     warnings: [],
   };
 
@@ -36,23 +37,12 @@ export function parseAdblock(rawText) {
 
     const isAllow = line.startsWith("@@");
     if (isAllow) line = line.slice(2);
-    const targetHostsExact = isAllow
-      ? output.hostAllowsExact
-      : output.hostBlocksExact;
-    const targetHostsSubtree = isAllow
-      ? output.hostAllowsSubtree
-      : output.hostBlocksSubtree;
+    const target = isAllow ? output.allow : output.block;
 
     const pattern = stripOptions(line);
-    const bareHost = parseBareDomainRule(pattern);
-    if (bareHost) {
-      targetHostsExact.add(bareHost);
-      continue;
-    }
-
-    const host = parseHostnameRule(pattern);
+    const host = parseBareDomainRule(pattern) ?? parseHostnameRule(pattern);
     if (host) {
-      targetHostsSubtree.add(host);
+      target.add(host);
       continue;
     }
 

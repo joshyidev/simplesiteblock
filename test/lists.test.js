@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluate, hydrateIndex, serializeIndex } from "../src/background/engine.js";
 import {
   addList,
-  compileAndStoreIndex,
   normalizeListUrl,
   parseCustomRules,
   parseListText,
@@ -26,8 +24,8 @@ test("list parser automatically detects hosts or adblock format", () => {
   assert.equal(hosts.detectedFormat, "hosts");
   assert.equal(adblock.detectedFormat, "adblock");
   assert.equal(domains.detectedFormat, "adblock");
-  assert.equal(domains.hostBlocksExact.has("example.com"), true);
-  assert.equal(domains.hostBlocksExact.has("example.org"), true);
+  assert.equal(domains.block.has("example.com"), true);
+  assert.equal(domains.block.has("example.org"), true);
 });
 
 test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
@@ -40,16 +38,8 @@ test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
   `);
 
   assert.equal(parsed.detectedFormat, "hosts");
-  assert.equal(parsed.hostBlocksExact.has("example-fakenews.test"), true);
-  assert.equal("regexBlocks" in parsed, false);
-});
-
-test("hosts parser output is exact-only after list parsing", () => {
-  const parsed = parseListText("0.0.0.0 example.com");
-  const index = hydrateIndex(serializeIndex(parsed));
-
-  assert.equal(evaluate("https://example.com", index).blocked, true);
-  assert.equal(evaluate("https://www.example.com", index).blocked, false);
+  assert.equal(parsed.block.has("example-fakenews.test"), true);
+  assert.equal("hostBlocksExact" in parsed, false);
 });
 
 test("auto detection rejects ordinary web pages and non-list text", () => {
@@ -76,10 +66,10 @@ test("custom rules parse as Adblock syntax", () => {
   `);
 
   assert.equal(parsed.detectedFormat, "adblock");
-  assert.equal(parsed.hostBlocksExact.has("custom-domain.test"), true);
-  assert.equal(parsed.hostBlocksSubtree.has("custom-block.test"), true);
-  assert.equal(parsed.hostAllowsSubtree.has("custom-allow.test"), true);
-  assert.equal("regexBlocks" in parsed, false);
+  assert.equal(parsed.block.has("custom-domain.test"), true);
+  assert.equal(parsed.block.has("custom-block.test"), true);
+  assert.equal(parsed.allow.has("custom-allow.test"), true);
+  assert.equal("hostBlocksExact" in parsed, false);
   assert.equal(parsed.warnings.length, 1);
 });
 
@@ -146,13 +136,6 @@ function makeChromeMock({
     lists,
     rawLists,
     customRules,
-    compiledIndex: {
-      hostBlocksExact: [],
-      hostAllowsExact: [],
-      hostBlocksSubtree: [],
-      hostAllowsSubtree: [],
-      builtAt: 1,
-    },
     pendingRebuild: false,
   };
   for (const [listId, text] of Object.entries(rawLists)) {
@@ -451,48 +434,9 @@ test("concurrent updateAllLists calls share one in-flight update", async () => {
     resolveFetch();
     await Promise.all([first, second]);
     assert.equal(fetchCalls, 1);
-    assert.equal(
-      written.filter((w) => "compiledIndex" in w).length,
-      1,
-      "compiled index should be written once",
-    );
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
-  }
-});
-
-test("concurrent compileAndStoreIndex calls share one in-flight compile", async () => {
-  const originalChrome = globalThis.chrome;
-  const { chrome, written } = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/list.txt",
-        enabled: true,
-      },
-    ],
-    rawLists: { abc: "0.0.0.0 example.com" },
-  });
-  const originalGet = chrome.storage.local.get;
-  let getCalls = 0;
-  chrome.storage.local.get = async (...args) => {
-    getCalls += 1;
-    return originalGet(...args);
-  };
-  globalThis.chrome = chrome;
-
-  try {
-    await Promise.all([compileAndStoreIndex(), compileAndStoreIndex()]);
-    assert.equal(getCalls, 2);
-    assert.equal(
-      written.filter((w) => "compiledIndex" in w).length,
-      1,
-      "compiled index should be written once",
-    );
-  } finally {
-    globalThis.chrome = originalChrome;
   }
 });
 
@@ -572,20 +516,10 @@ test("updateCustomRules validates and saves rules", async () => {
     assert.ok(rulesWrite, "customRules should have been saved");
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
     const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.ok(indexWrite, "compiledIndex should have been recompiled");
-    assert.ok(
-      "indexStats" in indexWrite,
-      "compiled index write should include indexStats summary",
-    );
-    assert.equal(
-      indexWrite.indexStats.total,
-      2,
-      "indexStats total should count the compiled rules",
-    );
-    assert.ok(
-      indexWrite.indexStats.builtAt > 0,
-      "indexStats should carry the build timestamp",
-    );
+    assert.equal(indexWrite, undefined, "no compiled index is written");
+    const pendingWrite = written.find((w) => "pendingRebuild" in w);
+    assert.ok(pendingWrite, "pendingRebuild should be set");
+    assert.equal(pendingWrite.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;
   }

@@ -5,7 +5,6 @@ import {
   importSettingsBackup,
   parseSettingsImport,
 } from "../src/background/backup.js";
-import { evaluate, hydrateIndex } from "../src/background/engine.js";
 import { rawListStorageKey } from "../src/background/storage.js";
 
 function makeState() {
@@ -133,7 +132,7 @@ test("settings import ignores raw list bodies", () => {
   assert.equal(imported.lists.length, 1);
 });
 
-test("settings import rebuilds compiled index from custom rules", async () => {
+test("settings import stores lists and rules and marks pending", async () => {
   const originalChrome = globalThis.chrome;
   const store = {};
   const payload = makePayload({
@@ -175,15 +174,12 @@ test("settings import rebuilds compiled index from custom rules", async () => {
 
   try {
     await importSettingsBackup(JSON.stringify(payload));
-    const index = hydrateIndex(store.compiledIndex);
 
-    assert.equal("compiledIndex" in payload, false);
-    assert.equal(evaluate("https://ads.example", index).blocked, false);
-    assert.equal(
-      evaluate("https://cdn.tracker.example/app.js", index).blocked,
-      true,
-    );
-    assert.equal(evaluate("https://safe.example", index).blocked, false);
+    assert.equal("compiledIndex" in store, false);
+    assert.equal(store.customRules, "@@||safe.example^\n||tracker.example^");
+    assert.equal(store.lists.length, 1);
+    assert.equal(store.lists[0].id, "list-1");
+    assert.deepEqual(store.rawLists, {});
     assert.equal(store.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;
@@ -231,13 +227,11 @@ test("settings import marks URL-only lists pending", async () => {
 
   try {
     await importSettingsBackup(JSON.stringify(payload));
-    const index = hydrateIndex(store.compiledIndex);
 
-    assert.equal(
-      evaluate("https://cdn.tracker.example/app.js", index).blocked,
-      true,
-    );
-    assert.equal(evaluate("https://ads.example", index).blocked, false);
+    assert.equal("compiledIndex" in store, false);
+    assert.equal(store.lists.length, 1);
+    assert.equal(store.lists[0].url, "https://example.com/hosts.txt");
+    assert.equal(store.customRules, "||tracker.example^");
     assert.equal(store.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;
