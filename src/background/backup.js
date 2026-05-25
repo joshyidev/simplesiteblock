@@ -14,7 +14,6 @@ import { extensionApi as ext } from "../extension_api.js";
 
 const EXPORT_APP = "SimpleSiteBlock";
 const EXPORT_VERSION = 1;
-const BLOCK_ACTIONS = new Set(["show_block_page", "close_tab"]);
 const LIST_FORMATS = new Set(["auto", "hosts", "adblock"]);
 
 export function createSettingsExport(state, { includePassword = false } = {}) {
@@ -92,9 +91,6 @@ export async function importSettingsBackup(text) {
 
 function exportSettings(settings) {
   return {
-    blockAction: validBlockAction(settings.blockAction)
-      ? settings.blockAction
-      : DEFAULT_SETTINGS.blockAction,
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
@@ -104,9 +100,6 @@ function exportSettings(settings) {
 function importSettings(settings, password) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     throw new Error("Settings are missing or invalid.");
-  }
-  if (!validBlockAction(settings.blockAction)) {
-    throw new Error("Block action setting is invalid.");
   }
   if (!validUpdateInterval(settings.updateIntervalDays)) {
     throw new Error("Auto-update interval setting is invalid.");
@@ -119,7 +112,6 @@ function importSettings(settings, password) {
 
   return {
     ...DEFAULT_SETTINGS,
-    blockAction: settings.blockAction,
     updateIntervalDays: settings.updateIntervalDays,
     ...passwordSettings,
     lastUnlockAt: 0,
@@ -190,10 +182,6 @@ function sanitizeLists(lists) {
       ruleCount: validRuleCount(list.ruleCount) ? list.ruleCount : 0,
     };
   });
-}
-
-function validBlockAction(value) {
-  return BLOCK_ACTIONS.has(value);
 }
 
 function validUpdateInterval(value) {

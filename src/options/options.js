@@ -93,15 +93,6 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <h2>Block action</h2>
-        <p class="muted section-desc">Action to take when blocking conditions are met.</p>
-        <div class="choice" id="blockActionChoices">
-          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show blocked page</label>
-          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab immediately</label>
-        </div>
-      </section>
-
-      <section class="panel">
         <div class="section-header password-header">
           <h2>Password</h2>
           <div class="section-header-actions">
@@ -293,13 +284,6 @@ function renderListRow(list) {
 }
 
 function bindEvents(state) {
-  app
-    .querySelector("#blockActionChoices")
-    .addEventListener("change", async (event) => {
-      if (event.target.name !== "blockAction") return;
-      await saveSettings({ blockAction: event.target.value });
-    });
-
   app
     .querySelector("#addListForm")
     .addEventListener("submit", async (event) => {

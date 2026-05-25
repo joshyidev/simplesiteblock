@@ -11,7 +11,6 @@ import { rawListStorageKey } from "../src/background/storage.js";
 function makeState() {
   return {
     settings: {
-      blockAction: "show_block_page",
       updateIntervalDays: 7,
       passwordEnabled: true,
       password: "accountability",
@@ -46,7 +45,6 @@ function makePayload(overrides = {}) {
     app: "SimpleSiteBlock",
     version: 1,
     settings: {
-      blockAction: "show_block_page",
       updateIntervalDays: 7,
     },
     lists: [],

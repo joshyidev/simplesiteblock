@@ -23,7 +23,6 @@ function normalizeIndexStats(stats) {
 }
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  blockAction: "show_block_page",
   passwordEnabled: false,
   password: "",
   lastUnlockAt: 0,

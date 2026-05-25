@@ -14,8 +14,8 @@ dependencies unless the task explicitly calls for it.
 
 ## Key Paths
 
-- `manifest/chrome.json` and `manifest/firefox.json`: extension entry points,
-  permissions, and browser-specific manifest data.
+- `manifest/chrome.json`: extension entry point, permissions, and manifest data.
+  This is a Chrome-only extension.
 - `src/background/service_worker.js`: navigation handling, state cache, alarms,
   and background event wiring.
 - `src/background/engine.js`: pure host matching, hydration, serialization, and
@@ -42,7 +42,7 @@ Run all tests:
 npm test
 ```
 
-Build the browser extensions manually:
+Build the extension manually:
 
 ```sh
 npm run build
@@ -54,12 +54,6 @@ Load the Chrome extension manually:
 2. Enable Developer mode.
 3. Choose Load unpacked.
 4. Select `dist/chrome`.
-
-Load the Firefox extension manually:
-
-1. Open `about:debugging#/runtime/this-firefox`.
-2. Choose Load Temporary Add-on.
-3. Select `dist/firefox/manifest.json`.
 
 ## Rule Model
 
@@ -136,5 +130,5 @@ Load the Firefox extension manually:
   cached raw list text, and the UI in a consistent state?
 - Do alarms avoid duplicate or stale schedules after upgrades?
 - Are parser changes covered by tests for valid, invalid, and skipped input?
-- Are extension permission changes reflected in both browser manifests and
+- Are extension permission changes reflected in `manifest/chrome.json` and
   justified?
