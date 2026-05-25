@@ -6,6 +6,7 @@ import {
   updateListSettings,
 } from "../background/lists.js";
 import { getState, saveSettings } from "../background/storage.js";
+import { lookupHost } from "../background/lookup.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
@@ -38,10 +39,6 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const totalRules = state.lists.reduce(
-    (sum, list) => sum + Number(list.ruleCount || 0),
-    0,
-  );
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
 
@@ -82,12 +79,26 @@ function renderApp(state) {
         <h2>Custom rules</h2>
         <form id="customRulesForm" class="custom-rules-form">
           <label class="field">
-            <textarea id="customRules" name="customRules" aria-label="Domains or supported Adblock rules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
+            <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
           </label>
-          <p class="muted">Use one domain per line. Plain domains match exactly; ||example.com^ includes subdomains; @@ allows a match.</p>
+          <p class="muted">One domain per line — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
             <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Block page</h2>
+        <form id="blockMessageForm" class="custom-rules-form">
+          <label class="field">
+            <input id="blockMessage" name="blockMessage" type="text" aria-label="Block page message" placeholder="Message shown on the block page" value="${escapeHtml(state.settings.blockPageMessage)}">
+          </label>
+          <p class="muted">Shown on the block page. Leave blank to use the default.</p>
+          <div class="form-actions custom-rules-actions">
+            <button id="saveBlockMessageButton" class="fit" type="submit">Save message</button>
+            <p class="custom-rules-status muted" id="blockMessageStatus" role="status" aria-live="polite"></p>
           </div>
         </form>
       </section>
@@ -129,6 +140,17 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
+        <h2>Diagnostics</h2>
+        <div class="row">
+          <label class="field">
+            <input id="lookupInput" type="text" aria-label="Domain to check" placeholder="example.com or https://example.com">
+          </label>
+          <button id="lookupButton" class="fit" type="button">Check</button>
+        </div>
+        <output id="lookupResult" class="verdict">No lookup run.</output>
+      </section>
+
+      <section class="panel">
         <h2>Links</h2>
         <nav class="link-list" aria-label="Help and project links">
           <a href="https://github.com/joshyidev/simplesiteblock/wiki">Documentation</a>
@@ -151,15 +173,39 @@ function renderApp(state) {
     </div>
   `;
 
-  const listsMeta = app.querySelector("#listsMeta");
-  if (listsMeta) {
-    const listCount = state.lists.length;
-    listsMeta.textContent = `${listCount} list${listCount === 1 ? "" : "s"} · ${totalRules.toLocaleString()} total rules`;
-  }
-
   bindEvents(state);
   animatePendingNoticeOut(animatePendingOut);
   lastPendingRebuild = state.pendingRebuild;
+  void updateStats(state);
+}
+
+// The truthful "domains blocked" number is the count of hosts in the applied
+// redirect rules (post-normalize, post-dedupe), so query DNR directly. Async, so
+// it refines #listsMeta after the synchronous render.
+async function updateStats(state) {
+  const listsMeta = app.querySelector("#listsMeta");
+  if (!listsMeta) return;
+
+  const built = state.rulesBuiltAt
+    ? new Date(state.rulesBuiltAt).toLocaleString()
+    : "Never";
+
+  let domains = 0;
+  try {
+    const rules = await ext.declarativeNetRequest.getDynamicRules();
+    for (const rule of rules) {
+      if (rule.action?.type === "redirect") {
+        domains += rule.condition?.requestDomains?.length || 0;
+      }
+    }
+  } catch {
+    domains = state.lists.reduce(
+      (sum, list) => sum + Number(list.ruleCount || 0),
+      0,
+    );
+  }
+
+  listsMeta.textContent = `${domains.toLocaleString()} domains blocked · Built ${built}`;
 }
 
 function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
@@ -310,6 +356,16 @@ function bindEvents(state) {
         setCustomRulesStatus(message);
         window.alert(message);
       }
+    });
+
+  app
+    .querySelector("#blockMessageForm")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      await saveSettings({ blockPageMessage: form.get("blockMessage") });
+      const status = app.querySelector("#blockMessageStatus");
+      if (status) status.textContent = "Block page message saved.";
     });
 
   app
@@ -512,6 +568,26 @@ function bindEvents(state) {
     }
   });
 
+  app.querySelector("#lookupButton").addEventListener("click", async () => {
+    const value = app.querySelector("#lookupInput").value;
+    const output = app.querySelector("#lookupResult");
+    output.classList.remove("is-blocked", "is-allowed");
+
+    const result = await lookupHost(value);
+    if (!result.ok) {
+      output.textContent = result.error;
+      return;
+    }
+    if (result.verdict === "blocked") {
+      output.textContent = `Blocked — matched ${result.matchedHost}`;
+      output.classList.add("is-blocked");
+    } else if (result.verdict === "allowed") {
+      output.textContent = `Allowed — an allow rule for ${result.matchedHost} overrides any block`;
+      output.classList.add("is-allowed");
+    } else {
+      output.textContent = `Not blocked — ${result.host} is not in any list`;
+    }
+  });
 }
 
 function setListsStatus(message) {

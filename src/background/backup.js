@@ -87,6 +87,10 @@ function exportSettings(settings) {
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
+    blockPageMessage:
+      typeof settings.blockPageMessage === "string"
+        ? settings.blockPageMessage
+        : DEFAULT_SETTINGS.blockPageMessage,
   };
 }
 
@@ -106,6 +110,10 @@ function importSettings(settings, password) {
   return {
     ...DEFAULT_SETTINGS,
     updateIntervalDays: settings.updateIntervalDays,
+    blockPageMessage:
+      typeof settings.blockPageMessage === "string"
+        ? settings.blockPageMessage
+        : DEFAULT_SETTINGS.blockPageMessage,
     ...passwordSettings,
     lastUnlockAt: 0,
   };

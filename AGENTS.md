@@ -12,15 +12,24 @@ The project uses plain browser ES modules. There is no bundler, transpiler, or
 framework layer, so keep imports browser-compatible and avoid adding build-time
 dependencies unless the task explicitly calls for it.
 
-## Status: mid-rewrite to declarativeNetRequest
+## Status: rewritten to declarativeNetRequest
 
 The v1 matching engine (a packed-string host index evaluated in the service
-worker on `webNavigation.onBeforeNavigate`) has been removed. The extension
-currently does **not** block anything: list management, fetching, parsing, and
-settings all work, but nothing applies the parsed rules yet. Blocking is being
-rebuilt on Chrome's `declarativeNetRequest` API; see `DNR.md` for the design.
-Until that pipeline lands, `pendingRebuild` flags that fetched/edited lists are
-not yet reflected in any active blocking rules.
+worker on `webNavigation.onBeforeNavigate`) has been removed. Blocking now runs
+on Chrome's `declarativeNetRequest` (DNR): parsed lists and custom rules are
+normalized, packed into dynamic rules, and applied by the browser. See `DNR.md`
+for the design.
+
+Blocking is rebuilt and reapplied by `rebuildRules()` in `lists.js` (combine all
+enabled lists' cached bodies + custom rules → normalize → pack → swap the full
+dynamic rule set). It runs on Update All (after fetch), on saving custom rules,
+and on settings import.
+
+Known gap: list CRUD (add/remove/enable/disable/edit) only sets `pendingRebuild`
+and does **not** reapply rules immediately — changes take effect on the next
+Update All. So a removed or disabled list keeps blocking until then.
+`pendingRebuild` means an enabled list has no cached body yet (needs a fetch
+before it can contribute rules), or a CRUD edit is awaiting Update All.
 
 ## Key Paths
 
@@ -85,9 +94,9 @@ Load the Chrome extension manually:
 - Prefer small, direct ES module changes. Keep code browser-native.
 - Use extension local storage through `src/background/storage.js` helpers.
 - Parser code should remain pure where practical and covered by `node --test`.
-- `pendingRebuild` means list metadata/raw-list changes exist that are not yet
-  reflected in active blocking rules. The rule-apply path that clears it is part
-  of the pending DNR rewrite (see Status).
+- `pendingRebuild` means list metadata/raw-list changes are not yet reflected in
+  active blocking rules. `rebuildRules()` clears it (see Status for what triggers
+  a rebuild and the CRUD gap).
 - Adding, removing, enabling/disabling, reformatting, or editing a list's URL
   sets `pendingRebuild`. URL edits must also clear cached raw text and
   validators (etag/last-modified) for that list.

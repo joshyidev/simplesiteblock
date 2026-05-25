@@ -12,6 +12,7 @@ import {
   saveLists,
   savePendingRebuild,
   saveRawList,
+  saveRulesBuiltAt,
 } from "./storage.js";
 
 export const ALARM_NAME = "update:index";
@@ -163,6 +164,7 @@ export async function rebuildRules() {
   await applyDynamicRules(
     packRules(normalizeHosts(block), normalizeHosts(allow)),
   );
+  await saveRulesBuiltAt(Date.now());
   await savePendingRebuild(pending);
 }
 

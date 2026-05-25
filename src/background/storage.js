@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   password: "",
   lastUnlockAt: 0,
   updateIntervalDays: 7,
+  blockPageMessage:
+    "You added this site to a block list. Take a breath and decide if you really need it right now.",
 });
 
 export async function ensureDefaults() {
@@ -35,6 +37,7 @@ export async function getState({ includeRawLists = false } = {}) {
     lists: [],
     customRules: "",
     pendingRebuild: false,
+    rulesBuiltAt: 0,
   };
   // Cached raw list bodies are stored per-list; callers should use getRawList()
   // instead of loading every body at once.
@@ -52,6 +55,7 @@ export async function getState({ includeRawLists = false } = {}) {
     customRules:
       typeof stored.customRules === "string" ? stored.customRules : "",
     pendingRebuild: Boolean(stored.pendingRebuild),
+    rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
   };
 }
 
@@ -101,6 +105,10 @@ export async function saveCustomRules(customRules) {
 
 export async function savePendingRebuild(pending) {
   await ext.storage.local.set({ pendingRebuild: pending });
+}
+
+export async function saveRulesBuiltAt(timestamp) {
+  await ext.storage.local.set({ rulesBuiltAt: timestamp });
 }
 
 export async function getStorageBytesInUse() {
