@@ -1,12 +1,7 @@
-import {
-  createSettingsExport,
-  importSettingsBackup,
-} from "../background/backup.js";
+import { createSettingsExport } from "../background/backup.js";
 import {
   addList,
   removeList,
-  updateAllLists,
-  updateCustomRules,
   updateListIdentity,
   updateListSettings,
 } from "../background/lists.js";
@@ -25,10 +20,7 @@ let editingListId = null;
 void boot();
 
 async function boot() {
-  const state = await getState({
-    includeRawLists: false,
-    includeCompiledIndex: false,
-  });
+  const state = await getState({ includeRawLists: false });
   if (!isOptionsUnlocked(state.settings)) {
     shell.classList.add("is-locked");
     app.hidden = true;
@@ -46,7 +38,6 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const totalRules = state.indexStats.total;
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
 
@@ -55,7 +46,7 @@ function renderApp(state) {
       <section class="panel span">
         <div class="section-header">
           <h2>Lists</h2>
-          <p class="list-summary muted" id="listsMeta"></p>
+          <p class="list-summary muted" id="listsMeta">${escapeHtml(statsText(state))}</p>
         </div>
         <div class="section-actions list-controls">
           <label class="field-inline">
@@ -85,11 +76,11 @@ function renderApp(state) {
 
       <section class="panel span">
         <h2>Custom rules</h2>
+        <p class="muted section-desc">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
         <form id="customRulesForm" class="custom-rules-form">
           <label class="field">
-            <textarea id="customRules" name="customRules" aria-label="Domains or supported Adblock rules" spellcheck="false" rows="8" placeholder="example.com&#10;www.example.net # optional comment&#10;||example.org^ # include subdomains&#10;@@||allowed.example.org^ # allow">${escapeHtml(state.customRules)}</textarea>
+            <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
           </label>
-          <p class="muted">Use one domain per line. Plain domains match exactly; ||example.com^ includes subdomains; @@ allows a match.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
             <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
@@ -98,12 +89,17 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <h2>Block action</h2>
-        <p class="muted section-desc">Action to take when blocking conditions are met.</p>
-        <div class="choice" id="blockActionChoices">
-          <label><input type="radio" name="blockAction" value="show_block_page" ${state.settings.blockAction === "show_block_page" ? "checked" : ""}> Show blocked page</label>
-          <label><input type="radio" name="blockAction" value="close_tab" ${state.settings.blockAction === "close_tab" ? "checked" : ""}> Close tab immediately</label>
-        </div>
+        <h2>Block page</h2>
+        <p class="muted section-desc">Add a message to the block page. Leave blank to use the default.</p>
+        <form id="blockMessageForm" class="custom-rules-form">
+          <label class="field">
+            <input id="blockMessage" name="blockMessage" type="text" aria-label="Block page message" placeholder="Message shown on the block page" value="${escapeHtml(state.settings.blockPageMessage)}">
+          </label>
+          <div class="form-actions custom-rules-actions">
+            <button id="saveBlockMessageButton" class="fit" type="submit">Save message</button>
+            <p class="custom-rules-status muted" id="blockMessageStatus" role="status" aria-live="polite"></p>
+          </div>
+        </form>
       </section>
 
       <section class="panel">
@@ -126,9 +122,8 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <h2>Import / Export</h2>
+        <h2>Import / Export Settings</h2>
         <div class="backup-actions">
-          <p class="muted section-desc">Saves and restores lists, custom rules, and settings.</p>
           <label class="checkline">
             <input id="includePasswordExport" type="checkbox">
             Include password settings when exporting
@@ -146,12 +141,11 @@ function renderApp(state) {
         <h2>Diagnostics</h2>
         <div class="row">
           <label class="field">
-            Test URL
-            <input id="testUrl" type="text" placeholder="example.com or https://example.com">
+            <input id="lookupInput" type="text" aria-label="Domain to check" placeholder="example.com or https://example.com">
           </label>
-          <button id="testUrlButton" class="fit" type="button">Test</button>
+          <button id="lookupButton" class="fit" type="button">Check</button>
         </div>
-        <output id="testVerdict" class="verdict">No test run.</output>
+        <output id="lookupResult" class="verdict">No lookup run.</output>
       </section>
 
       <section class="panel">
@@ -177,17 +171,21 @@ function renderApp(state) {
     </div>
   `;
 
-  const listsMeta = app.querySelector("#listsMeta");
-  if (listsMeta) {
-    const builtAt = state.indexStats.builtAt
-      ? new Date(state.indexStats.builtAt).toLocaleString()
-      : "Never";
-    listsMeta.textContent = `${totalRules.toLocaleString()} total rules · Index built ${builtAt}`;
-  }
-
   bindEvents(state);
   animatePendingNoticeOut(animatePendingOut);
   lastPendingRebuild = state.pendingRebuild;
+}
+
+// Reads the blocked-domain count recorded by the worker at rebuild time rather
+// than pulling the full dynamic rule set into the page (which spikes memory on
+// large lists). Synchronous, so the stats render with the rest of the page.
+function statsText(state) {
+  const built = state.rulesBuiltAt
+    ? new Date(state.rulesBuiltAt).toLocaleString()
+    : "Never";
+  const domains =
+    (state.appliedListDomainCount || 0) + (state.appliedCustomDomainCount || 0);
+  return `${domains.toLocaleString()} domains blocked · Built ${built}`;
 }
 
 function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
@@ -299,13 +297,6 @@ function renderListRow(list) {
 
 function bindEvents(state) {
   app
-    .querySelector("#blockActionChoices")
-    .addEventListener("change", async (event) => {
-      if (event.target.name !== "blockAction") return;
-      await saveSettings({ blockAction: event.target.value });
-    });
-
-  app
     .querySelector("#addListForm")
     .addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -333,7 +324,10 @@ function bindEvents(state) {
       setCustomRulesStatus("Saving custom rules...");
       setIndexControlsDisabled(true);
       try {
-        await updateCustomRules(form.get("customRules"));
+        await runBackgroundCommand({
+          type: "ssb:update-custom-rules",
+          rawRules: form.get("customRules"),
+        });
         await boot();
         setCustomRulesStatus("Custom rules saved.");
       } catch (error) {
@@ -342,6 +336,16 @@ function bindEvents(state) {
         setCustomRulesStatus(message);
         window.alert(message);
       }
+    });
+
+  app
+    .querySelector("#blockMessageForm")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      await saveSettings({ blockPageMessage: form.get("blockMessage") });
+      const status = app.querySelector("#blockMessageStatus");
+      if (status) status.textContent = "Block page message saved.";
     });
 
   app
@@ -355,7 +359,7 @@ function bindEvents(state) {
     setListsStatus("Updating lists...");
     setIndexControlsDisabled(true);
     try {
-      await updateAllLists();
+      await runBackgroundCommand({ type: "ssb:update-all-lists" });
       await boot();
       setListsStatus("All lists updated.");
     } catch (error) {
@@ -524,11 +528,11 @@ function bindEvents(state) {
     setBackupStatus("Importing settings...");
     setIndexControlsDisabled(true);
     try {
-      await importSettingsBackup(await file.text());
-      const nextState = await getState({
-        includeRawLists: false,
-        includeCompiledIndex: false,
+      await runBackgroundCommand({
+        type: "ssb:import-settings",
+        text: await file.text(),
       });
+      const nextState = await getState({ includeRawLists: false });
       if (nextState.settings.passwordEnabled) {
         sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       } else {
@@ -544,31 +548,37 @@ function bindEvents(state) {
     }
   });
 
-  app.querySelector("#testUrlButton").addEventListener("click", async () => {
-    const input = app.querySelector("#testUrl");
-    const url = normalizeTestUrl(input.value);
-    input.value = url;
-    const output = app.querySelector("#testVerdict");
+  app.querySelector("#lookupButton").addEventListener("click", async () => {
+    const value = app.querySelector("#lookupInput").value;
+    const output = app.querySelector("#lookupResult");
+    output.classList.remove("is-blocked", "is-allowed");
 
-    // Ask the background worker, which already holds the compiled index in
-    // memory, rather than deserializing the whole index into this page.
-    let verdict;
+    let result;
     try {
-      verdict = await ext.runtime.sendMessage({ type: "ssb:verdict", url });
+      result = await ext.runtime.sendMessage({
+        type: "ssb:lookup",
+        input: value,
+      });
     } catch {
-      verdict = null;
+      result = null;
     }
-    if (!verdict) {
-      output.textContent = "Test unavailable. Try again in a moment.";
-      output.classList.remove("is-blocked", "is-allowed");
+    if (!result) {
+      output.textContent = "Lookup unavailable. Try again in a moment.";
       return;
     }
-
-    output.textContent = verdict.blocked
-      ? `Blocked: ${verdict.reason}`
-      : "Allowed";
-    output.classList.toggle("is-blocked", verdict.blocked);
-    output.classList.toggle("is-allowed", !verdict.blocked);
+    if (!result.ok) {
+      output.textContent = result.error;
+      return;
+    }
+    if (result.verdict === "blocked") {
+      output.textContent = `Blocked — matched ${result.matchedHost}`;
+      output.classList.add("is-blocked");
+    } else if (result.verdict === "allowed") {
+      output.textContent = `Allowed — an allow rule for ${result.matchedHost} overrides any block`;
+      output.classList.add("is-allowed");
+    } else {
+      output.textContent = `Not blocked — ${result.host} is not in any list`;
+    }
   });
 }
 
@@ -577,6 +587,17 @@ function setListsStatus(message) {
   if (listsStatus) {
     listsStatus.textContent = message;
   }
+}
+
+async function runBackgroundCommand(message) {
+  let response;
+  try {
+    response = await ext.runtime.sendMessage(message);
+  } catch {
+    throw new Error("Background worker unavailable. Try again in a moment.");
+  }
+  if (response?.ok) return response;
+  throw new Error(response?.error || "Background worker unavailable.");
 }
 
 function setCustomRulesStatus(message) {
@@ -610,7 +631,6 @@ function setIndexControlsDisabled(disabled) {
     "#saveCustomRulesButton",
     "#updateAllButton",
     "#importSettingsButton",
-    "#testUrlButton",
     ".list-enabled",
     ".edit-list",
     ".save-list-edit",
@@ -628,12 +648,6 @@ function setIndexControlsDisabled(disabled) {
 function exportFileName() {
   const date = new Date().toISOString().slice(0, 10);
   return `simplesiteblock-settings-${date}.txt`;
-}
-
-function normalizeTestUrl(value) {
-  const trimmed = value.trim();
-  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
 }
 
 function escapeHtml(value) {

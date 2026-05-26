@@ -1,15 +1,15 @@
 import {
-  compileAndStoreIndex,
+  assertCustomRulesWithinLimit,
   normalizeListUrl,
   parseCustomRules,
+  rebuildAll,
   reconcileAlarms,
 } from "./lists.js";
-import { DEFAULT_SETTINGS, savePendingRebuild } from "./storage.js";
+import { DEFAULT_SETTINGS, getState, removeRawList } from "./storage.js";
 import { extensionApi as ext } from "../extension_api.js";
 
 const EXPORT_APP = "SimpleSiteBlock";
 const EXPORT_VERSION = 1;
-const BLOCK_ACTIONS = new Set(["show_block_page", "close_tab"]);
 const LIST_FORMATS = new Set(["auto", "hosts", "adblock"]);
 
 export function createSettingsExport(state, { includePassword = false } = {}) {
@@ -54,7 +54,7 @@ export function parseSettingsImport(text) {
   const settings = importSettings(payload.settings || {}, payload.password);
   const customRules =
     typeof payload.customRules === "string" ? payload.customRules : "";
-  parseCustomRules(customRules);
+  assertCustomRulesWithinLimit(parseCustomRules(customRules));
 
   const lists = sanitizeLists(payload.lists || []);
 
@@ -62,35 +62,42 @@ export function parseSettingsImport(text) {
 }
 
 export async function importSettingsBackup(text) {
+  const existing = await getState({ includeRawLists: false });
   const imported = parseSettingsImport(text);
+  const rawListIdsToClear = new Set([
+    ...existing.lists.map((list) => list.id),
+    ...imported.lists.map((list) => list.id),
+  ]);
+  await Promise.all(
+    [...rawListIdsToClear].map((listId) => removeRawList(listId)),
+  );
   await ext.storage.local.set({
     settings: imported.settings,
     lists: imported.lists,
-    rawLists: imported.rawLists,
+    rawLists: {},
     customRules: imported.customRules,
   });
-  await compileAndStoreIndex();
-  await savePendingRebuild(hasEnabledListWithoutRawText(imported));
+  // Imported lists arrive without cached bodies; rebuildAll applies custom rules
+  // now and flags pendingRebuild until the lists are fetched.
+  await rebuildAll();
   await reconcileAlarms();
 }
 
 function exportSettings(settings) {
   return {
-    blockAction: validBlockAction(settings.blockAction)
-      ? settings.blockAction
-      : DEFAULT_SETTINGS.blockAction,
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
+    blockPageMessage:
+      typeof settings.blockPageMessage === "string"
+        ? settings.blockPageMessage
+        : DEFAULT_SETTINGS.blockPageMessage,
   };
 }
 
 function importSettings(settings, password) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     throw new Error("Settings are missing or invalid.");
-  }
-  if (!validBlockAction(settings.blockAction)) {
-    throw new Error("Block action setting is invalid.");
   }
   if (!validUpdateInterval(settings.updateIntervalDays)) {
     throw new Error("Auto-update interval setting is invalid.");
@@ -103,8 +110,11 @@ function importSettings(settings, password) {
 
   return {
     ...DEFAULT_SETTINGS,
-    blockAction: settings.blockAction,
     updateIntervalDays: settings.updateIntervalDays,
+    blockPageMessage:
+      typeof settings.blockPageMessage === "string"
+        ? settings.blockPageMessage
+        : DEFAULT_SETTINGS.blockPageMessage,
     ...passwordSettings,
     lastUnlockAt: 0,
   };
@@ -167,27 +177,14 @@ function sanitizeLists(lists) {
       url,
       format,
       enabled: list.enabled !== false,
-      lastError: typeof list.lastError === "string" ? list.lastError : null,
-      etag: typeof list.etag === "string" ? list.etag : null,
-      lastModified:
-        typeof list.lastModified === "string" ? list.lastModified : null,
-      ruleCount: validRuleCount(list.ruleCount) ? list.ruleCount : 0,
+      lastError: null,
+      etag: null,
+      lastModified: null,
+      ruleCount: 0,
     };
   });
 }
 
-function validBlockAction(value) {
-  return BLOCK_ACTIONS.has(value);
-}
-
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
-}
-
-function validRuleCount(value) {
-  return Number.isInteger(value) && value >= 0;
-}
-
-function hasEnabledListWithoutRawText({ lists }) {
-  return lists.some((list) => list.enabled);
 }

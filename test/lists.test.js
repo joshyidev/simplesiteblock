@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluate, hydrateIndex, serializeIndex } from "../src/background/engine.js";
 import {
   addList,
+  assertListRedirectBudget,
   normalizeListUrl,
   parseCustomRules,
   parseListText,
+  rebuildListRules,
+  recomputePending,
   reconcileAlarms,
   removeList,
   updateAllLists,
@@ -13,6 +15,7 @@ import {
   updateListIdentity,
   updateListSettings,
 } from "../src/background/lists.js";
+import { rawListStorageKey } from "../src/background/storage.js";
 
 test("list parser automatically detects hosts or adblock format", () => {
   const hosts = parseListText("0.0.0.0 ads.example\n127.0.0.1 tracker.example");
@@ -24,8 +27,8 @@ test("list parser automatically detects hosts or adblock format", () => {
   assert.equal(hosts.detectedFormat, "hosts");
   assert.equal(adblock.detectedFormat, "adblock");
   assert.equal(domains.detectedFormat, "adblock");
-  assert.equal(domains.hostBlocksExact.has("example.com"), true);
-  assert.equal(domains.hostBlocksExact.has("example.org"), true);
+  assert.equal(domains.block.has("example.com"), true);
+  assert.equal(domains.block.has("example.org"), true);
 });
 
 test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
@@ -38,16 +41,8 @@ test("auto detection keeps StevenBlack-style hosts files as hosts", () => {
   `);
 
   assert.equal(parsed.detectedFormat, "hosts");
-  assert.equal(parsed.hostBlocksExact.has("example-fakenews.test"), true);
-  assert.equal("regexBlocks" in parsed, false);
-});
-
-test("hosts parser output is exact-only after list parsing", () => {
-  const parsed = parseListText("0.0.0.0 example.com");
-  const index = hydrateIndex(serializeIndex(parsed));
-
-  assert.equal(evaluate("https://example.com", index).blocked, true);
-  assert.equal(evaluate("https://www.example.com", index).blocked, false);
+  assert.equal(parsed.block.has("example-fakenews.test"), true);
+  assert.equal("hostBlocksExact" in parsed, false);
 });
 
 test("auto detection rejects ordinary web pages and non-list text", () => {
@@ -74,10 +69,10 @@ test("custom rules parse as Adblock syntax", () => {
   `);
 
   assert.equal(parsed.detectedFormat, "adblock");
-  assert.equal(parsed.hostBlocksExact.has("custom-domain.test"), true);
-  assert.equal(parsed.hostBlocksSubtree.has("custom-block.test"), true);
-  assert.equal(parsed.hostAllowsSubtree.has("custom-allow.test"), true);
-  assert.equal("regexBlocks" in parsed, false);
+  assert.equal(parsed.block.has("custom-domain.test"), true);
+  assert.equal(parsed.block.has("custom-block.test"), true);
+  assert.equal(parsed.allow.has("custom-allow.test"), true);
+  assert.equal("hostBlocksExact" in parsed, false);
   assert.equal(parsed.warnings.length, 1);
 });
 
@@ -144,16 +139,13 @@ function makeChromeMock({
     lists,
     rawLists,
     customRules,
-    compiledIndex: {
-      hostBlocksExact: [],
-      hostAllowsExact: [],
-      hostBlocksSubtree: [],
-      hostAllowsSubtree: [],
-      builtAt: 1,
-    },
     pendingRebuild: false,
   };
+  for (const [listId, text] of Object.entries(rawLists)) {
+    store[rawListStorageKey(listId)] = text;
+  }
   const written = [];
+  const removed = [];
   return {
     chrome: {
       storage: {
@@ -168,6 +160,12 @@ function makeChromeMock({
             written.push({ ...patch });
             Object.assign(store, patch);
           },
+          async remove(keys) {
+            for (const key of Array.isArray(keys) ? keys : [keys]) {
+              removed.push(key);
+              delete store[key];
+            }
+          },
         },
       },
       alarms: {
@@ -177,6 +175,7 @@ function makeChromeMock({
       },
     },
     written,
+    removed,
     store,
   };
 }
@@ -243,7 +242,7 @@ test("updateListIdentity changes name without clearing cached list body", async 
     assert.equal(store.lists[0].lastModified, "Wed, 01 Jan 2025 00:00:00 GMT");
     assert.equal(store.lists[0].lastError, "previous error");
     assert.equal(store.lists[0].ruleCount, 12);
-    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example");
+    assert.equal(store[rawListStorageKey("abc")], "0.0.0.0 ads.example");
     assert.equal(written.some((w) => "rawLists" in w), false);
     assert.equal(written.some((w) => "pendingRebuild" in w), false);
   } finally {
@@ -253,7 +252,7 @@ test("updateListIdentity changes name without clearing cached list body", async 
 
 test("updateListIdentity changes URL, clears cached body, and marks pending", async () => {
   const originalChrome = globalThis.chrome;
-  const { chrome, written, store } = makeChromeMock({
+  const { chrome, removed, store, written } = makeChromeMock({
     lists: [
       {
         id: "abc",
@@ -282,9 +281,8 @@ test("updateListIdentity changes URL, clears cached body, and marks pending", as
     assert.equal(store.lists[0].lastModified, null);
     assert.equal(store.lists[0].lastError, null);
     assert.equal(store.lists[0].ruleCount, 0);
-    assert.equal("abc" in store.rawLists, false);
-    const rawWrite = written.find((w) => "rawLists" in w);
-    assert.ok(rawWrite, "rawLists should have been saved");
+    assert.equal(rawListStorageKey("abc") in store, false);
+    assert.deepEqual(removed, [rawListStorageKey("abc")]);
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
     assert.ok(pendingWrite, "pendingRebuild should be set");
     assert.equal(pendingWrite.pendingRebuild, true);
@@ -386,7 +384,10 @@ test("updateAllLists fetches full body when validators exist without cached body
     await updateAllLists();
     assert.equal(requestHeaders["If-None-Match"], undefined);
     assert.equal(requestHeaders["If-Modified-Since"], undefined);
-    assert.equal(store.rawLists.abc, "0.0.0.0 ads.example.com");
+    assert.equal(
+      store[rawListStorageKey("abc")],
+      "0.0.0.0 ads.example.com",
+    );
     assert.equal(store.lists[0].etag, '"fresh"');
     assert.equal(store.lists[0].lastError, null);
   } finally {
@@ -395,9 +396,56 @@ test("updateAllLists fetches full body when validators exist without cached body
   }
 });
 
+test("concurrent updateAllLists calls share one in-flight update", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const { chrome, written } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        enabled: true,
+      },
+    ],
+  });
+  let fetchCalls = 0;
+  let resolveFetch;
+  let markFetchStarted;
+  const fetchReleased = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve;
+  });
+
+  globalThis.chrome = chrome;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    markFetchStarted();
+    await fetchReleased;
+    return new Response("0.0.0.0 example.com", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const first = updateAllLists();
+    const second = updateAllLists();
+    await fetchStarted;
+    assert.equal(fetchCalls, 1);
+    resolveFetch();
+    await Promise.all([first, second]);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("removeList removes the list and its raw content and marks pending", async () => {
   const originalChrome = globalThis.chrome;
-  const { chrome, written } = makeChromeMock({
+  const { chrome, removed, written } = makeChromeMock({
     lists: [
       {
         id: "abc",
@@ -415,9 +463,7 @@ test("removeList removes the list and its raw content and marks pending", async 
     const listWrite = written.find((w) => "lists" in w);
     assert.ok(listWrite, "lists should have been saved");
     assert.equal(listWrite.lists.length, 0);
-    const rawWrite = written.find((w) => "rawLists" in w);
-    assert.ok(rawWrite, "rawLists should have been saved");
-    assert.equal("abc" in rawWrite.rawLists, false);
+    assert.deepEqual(removed, [rawListStorageKey("abc")]);
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
     assert.ok(pendingWrite, "pendingRebuild should have been set");
     assert.equal(pendingWrite.pendingRebuild, true);
@@ -462,6 +508,66 @@ test("updateListSettings with enabled change marks pending without recompiling",
   }
 });
 
+test("toggling a list off then on cancels out and clears pending", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example.com" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    // Establish the applied baseline: list enabled with a cached body.
+    await rebuildListRules();
+    assert.equal(store.pendingRebuild, false);
+
+    await updateListSettings("abc", { enabled: false });
+    assert.equal(store.pendingRebuild, true, "disabling diverges from applied");
+
+    await updateListSettings("abc", { enabled: true });
+    assert.equal(
+      store.pendingRebuild,
+      false,
+      "re-enabling returns to the applied signature",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("recomputePending stays pending when an enabled list lacks a body", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+  });
+  // Signature matches the enabled set, but no cached body exists yet.
+  store.appliedSignature = JSON.stringify(["abc|auto"]);
+  globalThis.chrome = chrome;
+
+  try {
+    await recomputePending();
+    assert.equal(store.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
 test("updateCustomRules validates and saves rules", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, written } = makeChromeMock();
@@ -472,21 +578,38 @@ test("updateCustomRules validates and saves rules", async () => {
     const rulesWrite = written.find((w) => "customRules" in w);
     assert.ok(rulesWrite, "customRules should have been saved");
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
-    const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.ok(indexWrite, "compiledIndex should have been recompiled");
-    assert.ok(
-      "indexStats" in indexWrite,
-      "compiled index write should include indexStats summary",
+    // Custom rules apply to their own slice immediately and never touch list
+    // pending state.
+    const pendingWrite = written.find((w) => "pendingRebuild" in w);
+    assert.equal(pendingWrite, undefined, "custom rules do not set pending");
+    const statsWrite = written.find((w) => "appliedCustomDomainCount" in w);
+    assert.ok(statsWrite, "custom rule stats should be written");
+    assert.equal(statsWrite.appliedCustomDomainCount, 2);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("assertListRedirectBudget throws past the unsafe-rule cap", () => {
+  assert.doesNotThrow(() => assertListRedirectBudget(0));
+  assert.doesNotThrow(() => assertListRedirectBudget(4000));
+  assert.throws(() => assertListRedirectBudget(10000), /rule limit/);
+});
+
+test("updateCustomRules rejects more than 1000 domains", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock();
+  globalThis.chrome = chrome;
+  const rules = Array.from({ length: 1001 }, (_, i) => `d${i}.example`).join(
+    "\n",
+  );
+
+  try {
+    await assert.rejects(
+      () => updateCustomRules(rules),
+      /limited to 1000 domains/,
     );
-    assert.equal(
-      indexWrite.indexStats.total,
-      2,
-      "indexStats total should count the compiled rules",
-    );
-    assert.ok(
-      indexWrite.indexStats.builtAt > 0,
-      "indexStats should carry the build timestamp",
-    );
+    assert.equal(written.length, 0, "nothing is saved when over the limit");
   } finally {
     globalThis.chrome = originalChrome;
   }

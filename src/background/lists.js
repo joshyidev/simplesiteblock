@@ -1,25 +1,52 @@
-import { createCombinedIndex } from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
+import { normalizeHosts } from "./normalize.js";
+import { packRules } from "./packer.js";
+import { applyRuleSlice } from "./rules.js";
 import {
+  getRawList,
   getState,
-  saveCompiledIndex,
+  removeRawList,
+  saveAppliedSignature,
+  saveCustomDomainCount,
   saveCustomRules,
+  saveListDomainCount,
   saveLists,
   savePendingRebuild,
-  saveRawLists,
+  saveRawList,
+  saveRulesBuiltAt,
 } from "./storage.js";
 
 export const ALARM_NAME = "update:index";
 const MAX_CONTENT_LENGTH_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES = 25 * 1024 * 1024;
+// The custom-rules box is for a handful of personal additions; bulk lists belong
+// in a subscription. This keeps it scoped and reserves rule budget for lists.
+const MAX_CUSTOM_DOMAINS = 1000;
+// Top-level blocks are `redirect` rules, which are "unsafe" in DNR and capped at
+// 5,000 across all dynamic rules. The packer emits one redirect rule per ~1,000
+// main-frame block domains, so this bounds blockable domains at ~5 million. We
+// reserve a little headroom for the (domain-capped) custom slice's redirects.
+const MAX_UNSAFE_DYNAMIC_RULES = 5000;
+const MAX_LIST_REDIRECT_RULES = MAX_UNSAFE_DYNAMIC_RULES - 10;
+
+// Lists and custom rules occupy disjoint dynamic-rule ID ranges so each can be
+// applied independently. Custom rules use a higher priority band so they win
+// over subscribed lists (e.g. a custom block overrides a list's allow).
+const LIST_RULE_ID_BASE = 1;
+const CUSTOM_RULE_ID_BASE = 1_000_000;
+const CUSTOM_PRIORITIES = {
+  idBase: CUSTOM_RULE_ID_BASE,
+  allowPriority: 30,
+  redirectPriority: 22,
+};
 const FETCH_TIMEOUT_MS = 30000;
 
-let compilePromise = null;
+let updateAllPromise = null;
 
 export async function addList({ name, url }) {
-  const state = await getState();
+  const state = await getState({ includeRawLists: false });
   const normalizedUrl = normalizeListUrl(url);
   if (
     state.lists.some(
@@ -42,7 +69,7 @@ export async function addList({ name, url }) {
   };
 
   await saveLists([...state.lists, list]);
-  await savePendingRebuild(true);
+  await recomputePending();
 }
 
 export function normalizeListUrl(value) {
@@ -62,16 +89,14 @@ function normalizeStoredListUrl(value) {
 }
 
 export async function removeList(listId) {
-  const state = await getState();
-  const rawLists = { ...state.rawLists };
-  delete rawLists[listId];
+  const state = await getState({ includeRawLists: false });
   await saveLists(state.lists.filter((list) => list.id !== listId));
-  await saveRawLists(rawLists);
-  await savePendingRebuild(true);
+  await removeRawList(listId);
+  await recomputePending();
 }
 
 export async function updateListIdentity(listId, { name, url }) {
-  const state = await getState();
+  const state = await getState({ includeRawLists: false });
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
 
@@ -103,152 +128,225 @@ export async function updateListIdentity(listId, { name, url }) {
   await saveLists(lists);
   if (!urlChanged) return lists;
 
-  const rawLists = { ...state.rawLists };
-  delete rawLists[listId];
-  await saveRawLists(rawLists);
-  await savePendingRebuild(true);
+  await removeRawList(listId);
+  await recomputePending();
   return lists;
 }
 
 export async function updateListSettings(listId, patch) {
-  const state = await getState();
+  const state = await getState({ includeRawLists: false });
   const lists = state.lists.map((list) =>
     list.id === listId ? { ...list, ...patch } : list,
   );
   await saveLists(lists);
-  if ("enabled" in patch || "format" in patch) await savePendingRebuild(true);
+  await recomputePending();
 }
 
 export async function updateAllLists() {
-  const state = await getState();
+  if (updateAllPromise) return updateAllPromise;
+  updateAllPromise = doUpdateAllLists();
+  try {
+    return await updateAllPromise;
+  } finally {
+    updateAllPromise = null;
+  }
+}
+
+async function doUpdateAllLists() {
+  await fetchAndStoreEnabledLists();
+  // Rebuild both slices: this reapplies lists after the fetch and keeps the
+  // custom slice consistent (also self-heals rules left by older builds).
+  await rebuildAll();
+}
+
+// Apply both rule slices. Used on settings import, where lists and custom rules
+// both change at once.
+export async function rebuildAll() {
+  await rebuildListRules();
+  await rebuildCustomRules();
+}
+
+// Rebuild and apply the list rule slice from cached list bodies. Sets
+// pendingRebuild when an enabled list has no cached body yet (it needs a fetch
+// before it can contribute rules). Custom rules are a separate slice and are
+// untouched here.
+export async function rebuildListRules() {
+  const state = await getState({ includeRawLists: false });
+  const block = new Set();
+  const allow = new Set();
+  let pending = false;
+
+  for (const list of state.lists) {
+    if (!list.enabled) continue;
+    const text = await getRawList(list.id);
+    if (text === null) {
+      pending = true;
+      continue;
+    }
+    try {
+      addParsedHosts(parseListText(text, list.format), block, allow);
+    } catch {
+      // Invalid cached body; the list's lastError is tracked at fetch time.
+    }
+  }
+
+  const blockHosts = normalizeHosts(block);
+  const rules = packRules(blockHosts, normalizeHosts(allow), {
+    idBase: LIST_RULE_ID_BASE,
+  });
+  // Fail closed before touching DNR if we'd blow the unsafe-rule cap, so the
+  // user gets a clear message instead of a raw updateDynamicRules rejection and
+  // their existing rules stay applied.
+  assertListRedirectBudget(
+    rules.filter((rule) => rule.action.type === "redirect").length,
+  );
+  await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
+  await saveListDomainCount(blockHosts.size);
+  await saveRulesBuiltAt(Date.now());
+  await saveAppliedSignature(rebuildSignature(state));
+  await savePendingRebuild(pending);
+}
+
+// Rebuild and apply only the custom rule slice (higher priority band). Cheap:
+// it never reads or reparses list bodies, so editing custom rules is unaffected
+// by how large the subscribed lists are.
+export async function rebuildCustomRules() {
+  const state = await getState({ includeRawLists: false });
+  const block = new Set();
+  const allow = new Set();
+  if (state.customRules.trim()) {
+    addParsedHosts(parseCustomRules(state.customRules), block, allow);
+  }
+
+  const blockHosts = normalizeHosts(block);
+  const rules = packRules(blockHosts, normalizeHosts(allow), CUSTOM_PRIORITIES);
+  await applyRuleSlice(CUSTOM_RULE_ID_BASE, Number.MAX_SAFE_INTEGER, rules);
+  await saveCustomDomainCount(blockHosts.size);
+  await saveRulesBuiltAt(Date.now());
+}
+
+function addParsedHosts(parsed, block, allow) {
+  for (const host of parsed.block) block.add(host);
+  for (const host of parsed.allow) allow.add(host);
+}
+
+// Fingerprint of the inputs that determine the applied list rule slice: which
+// lists are enabled, with their format. Custom rules are excluded — they live in
+// their own slice and apply immediately, so they never make lists "pending".
+function rebuildSignature(state) {
+  return JSON.stringify(
+    state.lists
+      .filter((list) => list.enabled)
+      .map((list) => `${list.id}|${list.format}`)
+      .sort(),
+  );
+}
+
+// Set pendingRebuild to reflect whether a rebuild would actually change the
+// applied rules: the config diverged from what was last applied, or an enabled
+// list still has no cached body to contribute. A net-zero edit (e.g. disable
+// then re-enable a list) lands back on the applied signature and clears pending.
+export async function recomputePending() {
+  const state = await getState({ includeRawLists: false });
+  let pending = rebuildSignature(state) !== state.appliedSignature;
+  if (!pending) {
+    for (const list of state.lists) {
+      if (list.enabled && (await getRawList(list.id)) === null) {
+        pending = true;
+        break;
+      }
+    }
+  }
+  await savePendingRebuild(pending);
+}
+
+async function fetchAndStoreEnabledLists() {
+  const state = await getState({ includeRawLists: false });
   const enabledLists = state.lists.filter((list) => list.enabled);
   const fetchResults = new Map();
 
   await Promise.allSettled(
     enabledLists.map(async (list) => {
       try {
+        const cachedText = await getRawList(list.id);
         const result = await fetchList(list, {
-          hasCachedBody: Boolean(state.rawLists[list.id]),
+          hasCachedBody: cachedText !== null,
         });
-        if (result.notModified && !state.rawLists[list.id]) {
+        if (result.notModified && cachedText === null) {
           throw new Error("Server returned not modified but no cached body.");
         }
-        fetchResults.set(list.id, { ok: true, result });
+        const text = result.notModified ? cachedText : result.text;
+        if (!result.notModified) await saveRawList(list.id, result.text);
+        fetchResults.set(list.id, {
+          ok: true,
+          result: {
+            etag: result.etag,
+            lastModified: result.lastModified,
+            ruleCount: countParsedText(text, list.format),
+          },
+        });
       } catch (error) {
         fetchResults.set(list.id, { ok: false, error });
       }
     }),
   );
 
-  const now = Date.now();
-  const rawLists = { ...state.rawLists };
   const lists = state.lists.map((list) => {
     const outcome = fetchResults.get(list.id);
     if (!outcome) return list;
     if (!outcome.ok) return { ...list, lastError: outcome.error.message };
     const { result } = outcome;
-    if (!result.notModified) rawLists[list.id] = result.text;
     return {
       ...list,
       lastError: null,
       etag: result.etag ?? list.etag,
       lastModified: result.lastModified ?? list.lastModified,
+      ruleCount: result.ruleCount ?? list.ruleCount,
     };
   });
 
   await saveLists(lists);
-  await saveRawLists(rawLists);
-  await compileAndStoreIndex();
 }
 
 export async function updateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
-  parseCustomRules(customRules);
+  assertCustomRulesWithinLimit(parseCustomRules(customRules));
   await saveCustomRules(customRules);
-  return compileAndStoreIndex();
+  await rebuildCustomRules();
 }
 
-export async function updateListNow(listId, { compile = true } = {}) {
-  const state = await getState();
-  const target = state.lists.find((list) => list.id === listId);
-  if (!target) throw new Error("List not found");
-
-  try {
-    const result = await fetchList(target, {
-      hasCachedBody: Boolean(state.rawLists[listId]),
-    });
-    if (result.notModified && !state.rawLists[listId]) {
-      throw new Error(
-        "The server returned not modified, but no cached list body is available.",
-      );
-    }
-    const parsed = result.notModified
-      ? parseListText(state.rawLists[listId], target.format)
-      : parseListText(result.text, target.format);
-    const now = Date.now();
-    const lists = state.lists.map((list) =>
-      list.id === listId
-        ? {
-            ...list,
-            ruleCount: countRules(parsed),
-            lastError: null,
-            etag: result.etag ?? list.etag,
-            lastModified: result.lastModified ?? list.lastModified,
-          }
-        : list,
+// Guards against exceeding DNR's 5,000 unsafe (redirect) rule cap. Throws a
+// user-facing message rather than letting updateDynamicRules fail cryptically.
+export function assertListRedirectBudget(redirectRuleCount) {
+  if (redirectRuleCount > MAX_LIST_REDIRECT_RULES) {
+    throw new Error(
+      "Your enabled lists block more domains than Chrome's rule limit allows (about 5 million). Disable or remove some lists, then run Update All again.",
     );
-
-    const rawLists = { ...state.rawLists };
-    if (!result.notModified) rawLists[listId] = result.text;
-
-    await saveLists(lists);
-    await saveRawLists(rawLists);
-    if (compile) {
-      await compileAndStoreIndex();
-    } else {
-      await savePendingRebuild(true);
-    }
-  } catch (error) {
-    const lists = state.lists.map((list) =>
-      list.id === listId ? { ...list, lastError: error.message } : list,
-    );
-    await saveLists(lists);
-    throw error;
   }
 }
 
-export async function compileAndStoreIndex() {
-  if (compilePromise) return compilePromise;
+// Caps the custom-rules box at a handful of personal domains (bulk belongs in a
+// subscription). Throws so both the save and import paths reject over-limit input.
+export function assertCustomRulesWithinLimit(parsed) {
+  const domainCount = parsed.block.size + parsed.allow.size;
+  if (domainCount > MAX_CUSTOM_DOMAINS) {
+    throw new Error(
+      `Custom rules are limited to ${MAX_CUSTOM_DOMAINS} domains; found ${domainCount.toLocaleString()}. Put large lists in a subscription instead.`,
+    );
+  }
+}
 
-  const state = await getState({ includeCompiledIndex: false });
-  const parsedLists = [];
-  if (state.customRules.trim())
-    parsedLists.push(parseCustomRules(state.customRules));
-
-  const lists = state.lists.map((list) => {
-    if (!list.enabled || !state.rawLists[list.id]) return list;
-    try {
-      const parsed = parseListText(state.rawLists[list.id], list.format);
-      parsedLists.push(parsed);
-      return {
-        ...list,
-        ruleCount: countRules(parsed),
-        lastError: null,
-      };
-    } catch (error) {
-      return { ...list, ruleCount: 0, lastError: error.message };
-    }
-  });
-
-  const compiledIndex = createCombinedIndex(parsedLists);
-  await saveCompiledIndex(compiledIndex);
-  await saveLists(lists);
-  return compiledIndex;
+function countParsedText(text, format) {
+  try {
+    return countRules(parseListText(text, format));
+  } catch {
+    return 0;
+  }
 }
 
 export async function reconcileAlarms() {
   if (!ext.alarms) return;
-  const state = await getState();
+  const state = await getState({ includeRawLists: false });
   const periodInMinutes =
     clampInterval(state.settings.updateIntervalDays) * 1440;
   const existing = await ext.alarms.get(ALARM_NAME);
@@ -320,10 +418,8 @@ export function parseListText(text, format = "auto") {
 export function parseCustomRules(text) {
   if (!text.trim()) {
     return {
-      hostBlocksExact: new Set(),
-      hostAllowsExact: new Set(),
-      hostBlocksSubtree: new Set(),
-      hostAllowsSubtree: new Set(),
+      block: new Set(),
+      allow: new Set(),
       warnings: [],
       detectedFormat: "adblock",
     };
@@ -342,10 +438,8 @@ export function parseCustomRules(text) {
 
 function asHostsParsed(parsed, detectedFormat) {
   return {
-    hostBlocksExact: parsed.hosts,
-    hostAllowsExact: new Set(),
-    hostBlocksSubtree: new Set(),
-    hostAllowsSubtree: new Set(),
+    block: parsed.hosts,
+    allow: new Set(),
     warnings: parsed.warnings,
     mappingLineCount: parsed.mappingLineCount || 0,
     detectedFormat,
@@ -353,12 +447,7 @@ function asHostsParsed(parsed, detectedFormat) {
 }
 
 function countRules(parsed) {
-  return (
-    (parsed.hostBlocksExact?.size || 0) +
-    (parsed.hostAllowsExact?.size || 0) +
-    (parsed.hostBlocksSubtree?.size || 0) +
-    (parsed.hostAllowsSubtree?.size || 0)
-  );
+  return (parsed.block?.size || 0) + (parsed.allow?.size || 0);
 }
 
 function looksLikeHtmlDocument(text) {

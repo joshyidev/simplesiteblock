@@ -435,13 +435,15 @@ td:nth-child(6) {
 }
 
 .about-name {
-  margin: 0 0 2px;
-  font-size: 16px;
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .about-version {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .field-inline {

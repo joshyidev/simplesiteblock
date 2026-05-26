@@ -24,6 +24,7 @@ test("adblock parser supports host blocks, host allows, and skips unsupported pa
     ! comment
     ||ads.example.com^
     @@||allowed.example.com^$third-party
+    ||com^
     |https://cdn.example.com/ads/*
     /tracker\\d+\\.js/
     example.net/banner
@@ -31,11 +32,12 @@ test("adblock parser supports host blocks, host allows, and skips unsupported pa
     /[/
   `);
 
-  assert.equal(parsed.hostBlocksSubtree.has("ads.example.com"), true);
-  assert.equal(parsed.hostAllowsSubtree.has("allowed.example.com"), true);
-  assert.equal("regexBlocks" in parsed, false);
-  assert.equal("regexAllows" in parsed, false);
-  assert.equal(parsed.warnings.length, 5);
+  assert.equal(parsed.block.has("ads.example.com"), true);
+  assert.equal(parsed.allow.has("allowed.example.com"), true);
+  assert.equal(parsed.block.has("com"), false);
+  assert.equal("hostBlocksExact" in parsed, false);
+  assert.equal("hostBlocksSubtree" in parsed, false);
+  assert.equal(parsed.warnings.length, 6);
 });
 
 test("adblock parser supports bare domain lines and hash comments", () => {
@@ -48,9 +50,9 @@ test("adblock parser supports bare domain lines and hash comments", () => {
     example.com##.ad
   `);
 
-  assert.equal(parsed.hostBlocksExact.has("example.com"), true);
-  assert.equal(parsed.hostBlocksExact.has("example.org"), true);
-  assert.equal(parsed.hostBlocksExact.has("example.net"), true);
-  assert.equal("regexBlocks" in parsed, false);
+  assert.equal(parsed.block.has("example.com"), true);
+  assert.equal(parsed.block.has("example.org"), true);
+  assert.equal(parsed.block.has("example.net"), true);
+  assert.equal("hostBlocksExact" in parsed, false);
   assert.equal(parsed.warnings.length, 2);
 });

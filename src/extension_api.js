@@ -1,5 +1,5 @@
 function getExtensionApi() {
-  const api = globalThis.browser ?? globalThis.chrome;
+  const api = globalThis.chrome;
   if (!api) throw new Error("Extension API is unavailable.");
   return api;
 }

@@ -1,32 +1,13 @@
-import {
-  EMPTY_SERIALIZED_INDEX,
-  countIndexRules,
-  hydrateIndex,
-} from "./engine.js";
 import { extensionApi as ext } from "../extension_api.js";
 
-const EMPTY_INDEX_STATS = Object.freeze({ total: 0, builtAt: 0 });
-
-function buildIndexStats(index) {
-  return { total: countIndexRules(index), builtAt: index?.builtAt || 0 };
-}
-
-function normalizeIndexStats(stats) {
-  if (stats && typeof stats === "object") {
-    return {
-      total: Number(stats.total) || 0,
-      builtAt: Number(stats.builtAt) || 0,
-    };
-  }
-  return EMPTY_INDEX_STATS;
-}
+const RAW_LIST_PREFIX = "rawList:";
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  blockAction: "show_block_page",
   passwordEnabled: false,
   password: "",
   lastUnlockAt: 0,
   updateIntervalDays: 7,
+  blockPageMessage: "",
 });
 
 export async function ensureDefaults() {
@@ -46,26 +27,23 @@ export async function ensureDefaults() {
   if (!Array.isArray(stored.lists)) toWrite.lists = [];
   if (typeof stored.customRules !== "string") toWrite.customRules = "";
   if (Object.keys(toWrite).length > 0) await ext.storage.local.set(toWrite);
-  return getState({ includeRawLists: false, includeCompiledIndex: false });
+  return getState({ includeRawLists: false });
 }
 
-export async function getState({
-  includeRawLists = true,
-  includeCompiledIndex = true,
-} = {}) {
+export async function getState({ includeRawLists = false } = {}) {
   const request = {
     settings: DEFAULT_SETTINGS,
     lists: [],
     customRules: "",
-    indexStats: null,
     pendingRebuild: false,
+    rulesBuiltAt: 0,
+    appliedSignature: "",
+    appliedListDomainCount: 0,
+    appliedCustomDomainCount: 0,
   };
-  // rawLists holds the full text of every list and compiledIndex holds every
-  // compiled host (both many MB for large lists). Only fetch them when a caller
-  // actually needs them, so the options page and navigation path do not pay to
-  // deserialize them. indexStats is a tiny summary used for display.
+  // Cached raw list bodies are stored per-list; callers should use getRawList()
+  // instead of loading every body at once.
   if (includeRawLists) request.rawLists = {};
-  if (includeCompiledIndex) request.compiledIndex = EMPTY_SERIALIZED_INDEX;
 
   const stored = await ext.storage.local.get(request);
 
@@ -78,21 +56,19 @@ export async function getState({
         : {},
     customRules:
       typeof stored.customRules === "string" ? stored.customRules : "",
-    compiledIndex: includeCompiledIndex
-      ? stored.compiledIndex || EMPTY_SERIALIZED_INDEX
-      : EMPTY_SERIALIZED_INDEX,
-    indexStats: normalizeIndexStats(stored.indexStats),
     pendingRebuild: Boolean(stored.pendingRebuild),
+    rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
+    appliedSignature:
+      typeof stored.appliedSignature === "string"
+        ? stored.appliedSignature
+        : "",
+    appliedListDomainCount: Number(stored.appliedListDomainCount) || 0,
+    appliedCustomDomainCount: Number(stored.appliedCustomDomainCount) || 0,
   };
 }
 
-export async function getHydratedState() {
-  const state = await getState({ includeRawLists: false });
-  return { ...state, index: hydrateIndex(state.compiledIndex) };
-}
-
 export async function saveSettings(settingsPatch) {
-  const state = await getState();
+  const state = await getState({ includeRawLists: false });
   const settings = { ...state.settings, ...settingsPatch };
   await ext.storage.local.set({ settings });
   return settings;
@@ -103,9 +79,31 @@ export async function saveLists(lists) {
   return lists;
 }
 
-export async function saveRawLists(rawLists) {
-  await ext.storage.local.set({ rawLists });
-  return rawLists;
+export function rawListStorageKey(listId) {
+  return `${RAW_LIST_PREFIX}${listId}`;
+}
+
+export function isRawListStorageKey(key) {
+  return typeof key === "string" && key.startsWith(RAW_LIST_PREFIX);
+}
+
+export async function getRawList(listId) {
+  const key = rawListStorageKey(listId);
+  const stored = await ext.storage.local.get({ [key]: null });
+  return typeof stored[key] === "string" ? stored[key] : null;
+}
+
+export async function saveRawList(listId, text) {
+  await ext.storage.local.set({ [rawListStorageKey(listId)]: String(text) });
+}
+
+export async function removeRawList(listId) {
+  const key = rawListStorageKey(listId);
+  if (ext.storage.local.remove) {
+    await ext.storage.local.remove(key);
+    return;
+  }
+  await ext.storage.local.set({ [key]: null });
 }
 
 export async function saveCustomRules(customRules) {
@@ -113,17 +111,24 @@ export async function saveCustomRules(customRules) {
   return customRules;
 }
 
-export async function saveCompiledIndex(compiledIndex) {
-  await ext.storage.local.set({
-    compiledIndex,
-    indexStats: buildIndexStats(compiledIndex),
-    pendingRebuild: false,
-  });
-  return compiledIndex;
-}
-
 export async function savePendingRebuild(pending) {
   await ext.storage.local.set({ pendingRebuild: pending });
+}
+
+export async function saveRulesBuiltAt(timestamp) {
+  await ext.storage.local.set({ rulesBuiltAt: timestamp });
+}
+
+export async function saveAppliedSignature(signature) {
+  await ext.storage.local.set({ appliedSignature: signature });
+}
+
+export async function saveListDomainCount(count) {
+  await ext.storage.local.set({ appliedListDomainCount: count });
+}
+
+export async function saveCustomDomainCount(count) {
+  await ext.storage.local.set({ appliedCustomDomainCount: count });
 }
 
 export async function getStorageBytesInUse() {
