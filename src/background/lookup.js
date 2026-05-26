@@ -4,7 +4,8 @@ import { normalizeHostname } from "./parser/hosts.js";
 // Answers "is this domain blocked, and why?" against the applied dynamic rules.
 // Matching is subtree: a rule keyed on host H matches H and all subdomains, so
 // the query matches a rule if any parent-suffix of the query is in the rule's
-// requestDomains. Allow rules (priority 10) override block/redirect.
+// requestDomains. The returned verdict mirrors the priority bands we install in
+// DNR; higher priority wins, and allow wins ties within a band.
 export async function lookupHost(input) {
   const host = normalizeHostname(extractHost(input));
   if (!host || !host.includes(".")) {
@@ -21,8 +22,7 @@ export async function lookupHost(input) {
 
 export function evaluateLookup(host, rules) {
   const suffixes = hostSuffixes(host);
-  let allowMatch = null;
-  let blockMatch = null;
+  let best = null;
 
   for (const rule of rules) {
     const domains = rule.condition?.requestDomains;
@@ -31,16 +31,32 @@ export function evaluateLookup(host, rules) {
     if (!matched) continue;
 
     const type = rule.action?.type;
-    if (type === "allow") {
-      allowMatch ??= matched;
-    } else if (type === "redirect" || type === "block") {
-      blockMatch ??= matched;
-    }
+    if (type !== "allow" && type !== "redirect" && type !== "block") continue;
+
+    const candidate = {
+      type,
+      matchedHost: matched,
+      priority: Number(rule.priority) || 1,
+    };
+    if (!best || compareRuleMatch(candidate, best) > 0) best = candidate;
   }
 
-  if (allowMatch) return { verdict: "allowed", matchedHost: allowMatch };
-  if (blockMatch) return { verdict: "blocked", matchedHost: blockMatch };
+  if (best?.type === "allow") {
+    return { verdict: "allowed", matchedHost: best.matchedHost };
+  }
+  if (best) return { verdict: "blocked", matchedHost: best.matchedHost };
   return { verdict: "none", matchedHost: null };
+}
+
+function compareRuleMatch(a, b) {
+  if (a.priority !== b.priority) return a.priority - b.priority;
+  return actionRank(a.type) - actionRank(b.type);
+}
+
+function actionRank(type) {
+  if (type === "allow") return 3;
+  if (type === "redirect") return 2;
+  return 1;
 }
 
 // Accept a bare domain or a pasted URL: when the input carries a scheme or

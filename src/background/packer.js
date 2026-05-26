@@ -2,28 +2,16 @@
 // matches a host and all its subdomains, so every rule is subtree by nature.
 const PACK_SIZE = 1000;
 const BLOCK_PAGE_PATH = "/src/blocked/blocked.html";
-const SAFE_RESOURCE_TYPES = [
-  "sub_frame",
-  "script",
-  "image",
-  "media",
-  "xmlhttprequest",
-  "stylesheet",
-  "font",
-  "object",
-  "ping",
-  "other",
-];
 
 // idBase namespaces the rule IDs so independently-applied sets (lists vs custom
-// rules) never collide. The priority band lets one set outrank another; within a
-// band, allow > redirect/block by priority. Allow always wins via the highest.
+// rules) never collide. The priority band lets one set outrank another; the
+// allow band sits above redirect so an allow always wins. Blocking is top-level
+// only: a redirect to the block page on main_frame (no subresource rules).
 export function packRules(blockHosts, allowHosts, options = {}) {
   const {
     idBase = 1,
     allowPriority = 10,
     redirectPriority = 2,
-    blockPriority = 1,
   } = options;
 
   const block = [...blockHosts].sort();
@@ -38,12 +26,12 @@ export function packRules(blockHosts, allowHosts, options = {}) {
       action: { type: "allow" },
       condition: {
         requestDomains: allow.slice(i, i + PACK_SIZE),
-        resourceTypes: ["main_frame", ...SAFE_RESOURCE_TYPES],
+        resourceTypes: ["main_frame"],
       },
     });
   }
 
-  // Top-level navigations redirect to the block page; subresources are blocked.
+  // Top-level navigations redirect to the block page.
   for (let i = 0; i < block.length; i += PACK_SIZE) {
     const batch = block.slice(i, i + PACK_SIZE);
     rules.push({
@@ -54,12 +42,6 @@ export function packRules(blockHosts, allowHosts, options = {}) {
         redirect: { extensionPath: BLOCK_PAGE_PATH },
       },
       condition: { requestDomains: batch, resourceTypes: ["main_frame"] },
-    });
-    rules.push({
-      id: id++,
-      priority: blockPriority,
-      action: { type: "block" },
-      condition: { requestDomains: batch, resourceTypes: SAFE_RESOURCE_TYPES },
     });
   }
 

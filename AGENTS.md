@@ -17,8 +17,15 @@ dependencies unless the task explicitly calls for it.
 The v1 matching engine (a packed-string host index evaluated in the service
 worker on `webNavigation.onBeforeNavigate`) has been removed. Blocking now runs
 on Chrome's `declarativeNetRequest` (DNR): parsed lists and custom rules are
-normalized, packed into dynamic rules, and applied by the browser. See `DNR.md`
-for the design.
+normalized, packed into dynamic rules, and applied by the browser.
+
+Blocking is **top-level only** — a `redirect` to the block page on `main_frame`
+requests (plus `allow` rules for exceptions). There are no subresource rules, so
+a blocked host embedded as an iframe/script in another page is not blocked; this
+is a site blocker, not a subresource/ad blocker. Note `redirect` is an "unsafe"
+DNR action, capped at 5,000 dynamic rules — at ~1,000 domains packed per rule
+that bounds blockable domains at ~5 million (`assertListRedirectBudget` guards
+it).
 
 Rules are applied as **two independent slices** with disjoint dynamic-rule ID
 ranges (see `lists.js`):
@@ -33,8 +40,8 @@ ranges (see `lists.js`):
 `rebuildAll()` runs both and is used on Update All (after fetch) and settings
 import. `applyRuleSlice` removes a slice by its actual ID range (queried via
 `getDynamicRules`), so it self-heals stale rules from older builds. Custom rules
-use a higher priority band so they win over lists — e.g. a custom block
-overrides a list's allow. Allow still beats block within each band.
+use a higher priority band so they win over lists — e.g. a custom block entry
+overrides a list's allow. Allow still beats redirect within each band.
 
 Known gap: list CRUD (add/remove/enable/disable/edit) only sets `pendingRebuild`
 and does **not** reapply the list slice immediately — changes take effect on the
@@ -87,8 +94,9 @@ Load the Chrome extension manually:
 ## Rule Model
 
 - Matching is subtree-only: every block/allow entry matches a host **and all of
-  its subdomains**. There is no exact-host (apex-only) matching. See DNR.md
-  "Matching model" for why.
+  its subdomains**. There is no exact-host (apex-only) matching — DNR's
+  `requestDomains` is inherently subtree, and apex-only matching would require
+  per-host `urlFilter` rules that can't batch and would blow the rule limit.
 - Hosts-file entries (`0.0.0.0 example.com`), plain domains (`example.com`), and
   `||example.com^` all parse to the same subtree block of `example.com`.
 - `@@example.com` and `@@||example.com^` parse to subtree allow rules.

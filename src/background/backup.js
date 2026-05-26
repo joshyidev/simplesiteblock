@@ -177,19 +177,14 @@ function sanitizeLists(lists) {
       url,
       format,
       enabled: list.enabled !== false,
-      lastError: typeof list.lastError === "string" ? list.lastError : null,
-      etag: typeof list.etag === "string" ? list.etag : null,
-      lastModified:
-        typeof list.lastModified === "string" ? list.lastModified : null,
-      ruleCount: validRuleCount(list.ruleCount) ? list.ruleCount : 0,
+      lastError: null,
+      etag: null,
+      lastModified: null,
+      ruleCount: 0,
     };
   });
 }
 
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
-}
-
-function validRuleCount(value) {
-  return Number.isInteger(value) && value >= 0;
 }

@@ -1,8 +1,7 @@
 import { normalizeHostname } from "./parser/hosts.js";
 
 // Validate hosts as written (no eTLD+1 reduction) and drop any host whose parent
-// is already present: subtree matching on the parent already covers it. See
-// DNR.md "Matching model" and "Normalization".
+// is already present: subtree matching on the parent already covers it.
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
 export function normalizeHosts(rawHosts) {

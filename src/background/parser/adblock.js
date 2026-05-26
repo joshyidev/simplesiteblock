@@ -75,5 +75,6 @@ function parseHostnameRule(pattern) {
   if (!pattern.startsWith("||")) return null;
   const rest = pattern.slice(2);
   const domain = rest.split(/[\^/?*$|]/, 1)[0];
-  return normalizeHostname(domain);
+  const host = normalizeHostname(domain);
+  return host?.includes(".") ? host : null;
 }

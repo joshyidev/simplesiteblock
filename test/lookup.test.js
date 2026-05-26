@@ -24,6 +24,24 @@ test("evaluateLookup lets an allow rule override a block", () => {
   assert.equal(result.matchedHost, "example.com");
 });
 
+test("evaluateLookup respects custom priority over list allow rules", () => {
+  const listRules = packRules(new Set(), new Set(["example.com"]));
+  const customRules = packRules(new Set(["example.com"]), new Set(), {
+    idBase: 1000000,
+    allowPriority: 30,
+    redirectPriority: 22,
+    blockPriority: 21,
+  });
+
+  const result = evaluateLookup("www.example.com", [
+    ...listRules,
+    ...customRules,
+  ]);
+
+  assert.equal(result.verdict, "blocked");
+  assert.equal(result.matchedHost, "example.com");
+});
+
 test("evaluateLookup returns none when nothing matches", () => {
   const rules = packRules(new Set(["example.com"]), new Set());
   const result = evaluateLookup("other.test", rules);

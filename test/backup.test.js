@@ -61,6 +61,17 @@ test("settings export omits derived and cached data by default", () => {
   assert.equal("rawLists" in payload, false);
   assert.equal("password" in payload, false);
   assert.equal("password" in payload.settings, false);
+  assert.deepEqual(payload.lists[0], {
+    id: "list-1",
+    name: "Hosts",
+    url: "https://example.com/hosts.txt",
+    format: "hosts",
+    enabled: true,
+    lastError: null,
+    etag: null,
+    lastModified: null,
+    ruleCount: 0,
+  });
 });
 
 test("settings export includes password settings only when requested", () => {
@@ -140,6 +151,40 @@ test("settings import ignores raw list bodies", () => {
 
   assert.deepEqual(imported.rawLists, {});
   assert.equal(imported.lists.length, 1);
+});
+
+test("settings import clears derived list metadata", () => {
+  const imported = parseSettingsImport(
+    JSON.stringify(
+      makePayload({
+        lists: [
+          {
+            id: "list-1",
+            name: "List",
+            url: "https://example.com/list.txt",
+            format: "auto",
+            enabled: true,
+            lastError: "stale error",
+            etag: '"stale"',
+            lastModified: "Wed, 01 Jan 2025 00:00:00 GMT",
+            ruleCount: 123,
+          },
+        ],
+      }),
+    ),
+  );
+
+  assert.deepEqual(imported.lists[0], {
+    id: "list-1",
+    name: "List",
+    url: "https://example.com/list.txt",
+    format: "auto",
+    enabled: true,
+    lastError: null,
+    etag: null,
+    lastModified: null,
+    ruleCount: 0,
+  });
 });
 
 test("settings import stores lists and rules and marks pending", async () => {

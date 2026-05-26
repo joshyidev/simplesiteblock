@@ -40,7 +40,6 @@ const CUSTOM_PRIORITIES = {
   idBase: CUSTOM_RULE_ID_BASE,
   allowPriority: 30,
   redirectPriority: 22,
-  blockPriority: 21,
 };
 const FETCH_TIMEOUT_MS = 30000;
 

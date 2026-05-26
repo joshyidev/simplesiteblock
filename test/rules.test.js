@@ -38,19 +38,19 @@ test("normalizeHosts prunes subdomains already covered by a listed parent", () =
   assert.equal(hosts.size, 2);
 });
 
-test("packRules emits redirect + block per batch and allow rules first", () => {
+test("packRules emits main-frame redirect rules and allow rules first", () => {
   const rules = packRules(
     new Set(["block.test"]),
     new Set(["allow.test"]),
   );
 
-  assert.equal(rules.length, 3);
+  assert.equal(rules.length, 2);
 
   const allowRule = rules[0];
   assert.equal(allowRule.action.type, "allow");
   assert.equal(allowRule.priority, 10);
   assert.deepEqual(allowRule.condition.requestDomains, ["allow.test"]);
-  assert.ok(allowRule.condition.resourceTypes.includes("main_frame"));
+  assert.deepEqual(allowRule.condition.resourceTypes, ["main_frame"]);
 
   const redirectRule = rules[1];
   assert.equal(redirectRule.action.type, "redirect");
@@ -59,10 +59,6 @@ test("packRules emits redirect + block per batch and allow rules first", () => {
     "/src/blocked/blocked.html",
   );
   assert.deepEqual(redirectRule.condition.resourceTypes, ["main_frame"]);
-
-  const blockRule = rules[2];
-  assert.equal(blockRule.action.type, "block");
-  assert.equal(blockRule.condition.resourceTypes.includes("main_frame"), false);
 
   const ids = rules.map((r) => r.id);
   assert.equal(new Set(ids).size, ids.length, "rule ids are unique");
@@ -73,10 +69,9 @@ test("packRules batches at 1000 hosts per rule", () => {
   for (let i = 0; i < 1001; i += 1) block.add(`host${i}.test`);
 
   const rules = packRules(block, new Set());
-  // 1001 hosts -> 2 batches -> 2 redirect + 2 block rules.
-  assert.equal(rules.length, 4);
+  // 1001 hosts -> 2 batches -> 2 redirect rules.
+  assert.equal(rules.length, 2);
   assert.equal(rules.filter((r) => r.action.type === "redirect").length, 2);
-  assert.equal(rules.filter((r) => r.action.type === "block").length, 2);
 });
 
 test("packRules returns nothing when there are no hosts", () => {
@@ -95,8 +90,6 @@ test("packRules honors a custom idBase and priority band", () => {
   assert.equal(rules[0].action.type, "allow");
   assert.equal(rules[1].priority, 22);
   assert.equal(rules[1].action.type, "redirect");
-  assert.equal(rules[2].priority, 21);
-  assert.equal(rules[2].action.type, "block");
 });
 
 test("applyRuleSlice removes existing rules in its ID range and adds new ones", async () => {
