@@ -76,11 +76,11 @@ function renderApp(state) {
 
       <section class="panel span">
         <h2>Custom rules</h2>
+        <p class="muted section-desc">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
         <form id="customRulesForm" class="custom-rules-form">
           <label class="field">
             <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
           </label>
-          <p class="muted">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
             <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
@@ -90,11 +90,11 @@ function renderApp(state) {
 
       <section class="panel">
         <h2>Block page</h2>
+        <p class="muted section-desc">Add a message to the block page. Leave blank to use the default.</p>
         <form id="blockMessageForm" class="custom-rules-form">
           <label class="field">
             <input id="blockMessage" name="blockMessage" type="text" aria-label="Block page message" placeholder="Message shown on the block page" value="${escapeHtml(state.settings.blockPageMessage)}">
           </label>
-          <p class="muted">Add a message to the block page. Leave blank to use the default.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveBlockMessageButton" class="fit" type="submit">Save message</button>
             <p class="custom-rules-status muted" id="blockMessageStatus" role="status" aria-live="polite"></p>
@@ -122,9 +122,8 @@ function renderApp(state) {
       </section>
 
       <section class="panel">
-        <h2>Import / Export</h2>
+        <h2>Import / Export Settings</h2>
         <div class="backup-actions">
-          <p class="muted section-desc">Saves and restores lists, custom rules, and settings.</p>
           <label class="checkline">
             <input id="includePasswordExport" type="checkbox">
             Include password settings when exporting

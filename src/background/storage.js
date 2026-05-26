@@ -7,8 +7,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   password: "",
   lastUnlockAt: 0,
   updateIntervalDays: 7,
-  blockPageMessage:
-    "You added this site to a block list. Take a breath and decide if you really need it right now.",
+  blockPageMessage: "",
 });
 
 export async function ensureDefaults() {
@@ -60,7 +59,9 @@ export async function getState({ includeRawLists = false } = {}) {
     pendingRebuild: Boolean(stored.pendingRebuild),
     rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
     appliedSignature:
-      typeof stored.appliedSignature === "string" ? stored.appliedSignature : "",
+      typeof stored.appliedSignature === "string"
+        ? stored.appliedSignature
+        : "",
     appliedListDomainCount: Number(stored.appliedListDomainCount) || 0,
     appliedCustomDomainCount: Number(stored.appliedCustomDomainCount) || 0,
   };
