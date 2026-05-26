@@ -6,7 +6,6 @@ import {
   updateListSettings,
 } from "../background/lists.js";
 import { getState, saveSettings } from "../background/storage.js";
-import { lookupHost } from "../background/lookup.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
 
@@ -47,7 +46,7 @@ function renderApp(state) {
       <section class="panel span">
         <div class="section-header">
           <h2>Lists</h2>
-          <p class="list-summary muted" id="listsMeta"></p>
+          <p class="list-summary muted" id="listsMeta">${escapeHtml(statsText(state))}</p>
         </div>
         <div class="section-actions list-controls">
           <label class="field-inline">
@@ -81,7 +80,7 @@ function renderApp(state) {
           <label class="field">
             <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
           </label>
-          <p class="muted">One domain per line — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
+          <p class="muted">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
             <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
@@ -95,7 +94,7 @@ function renderApp(state) {
           <label class="field">
             <input id="blockMessage" name="blockMessage" type="text" aria-label="Block page message" placeholder="Message shown on the block page" value="${escapeHtml(state.settings.blockPageMessage)}">
           </label>
-          <p class="muted">Shown on the block page. Leave blank to use the default.</p>
+          <p class="muted">Add a message to the block page. Leave blank to use the default.</p>
           <div class="form-actions custom-rules-actions">
             <button id="saveBlockMessageButton" class="fit" type="submit">Save message</button>
             <p class="custom-rules-status muted" id="blockMessageStatus" role="status" aria-live="polite"></p>
@@ -176,36 +175,18 @@ function renderApp(state) {
   bindEvents(state);
   animatePendingNoticeOut(animatePendingOut);
   lastPendingRebuild = state.pendingRebuild;
-  void updateStats(state);
 }
 
-// The truthful "domains blocked" number is the count of hosts in the applied
-// redirect rules (post-normalize, post-dedupe), so query DNR directly. Async, so
-// it refines #listsMeta after the synchronous render.
-async function updateStats(state) {
-  const listsMeta = app.querySelector("#listsMeta");
-  if (!listsMeta) return;
-
+// Reads the blocked-domain count recorded by the worker at rebuild time rather
+// than pulling the full dynamic rule set into the page (which spikes memory on
+// large lists). Synchronous, so the stats render with the rest of the page.
+function statsText(state) {
   const built = state.rulesBuiltAt
     ? new Date(state.rulesBuiltAt).toLocaleString()
     : "Never";
-
-  let domains = 0;
-  try {
-    const rules = await ext.declarativeNetRequest.getDynamicRules();
-    for (const rule of rules) {
-      if (rule.action?.type === "redirect") {
-        domains += rule.condition?.requestDomains?.length || 0;
-      }
-    }
-  } catch {
-    domains = state.lists.reduce(
-      (sum, list) => sum + Number(list.ruleCount || 0),
-      0,
-    );
-  }
-
-  listsMeta.textContent = `${domains.toLocaleString()} domains blocked · Built ${built}`;
+  const domains =
+    (state.appliedListDomainCount || 0) + (state.appliedCustomDomainCount || 0);
+  return `${domains.toLocaleString()} domains blocked · Built ${built}`;
 }
 
 function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
@@ -573,7 +554,19 @@ function bindEvents(state) {
     const output = app.querySelector("#lookupResult");
     output.classList.remove("is-blocked", "is-allowed");
 
-    const result = await lookupHost(value);
+    let result;
+    try {
+      result = await ext.runtime.sendMessage({
+        type: "ssb:lookup",
+        input: value,
+      });
+    } catch {
+      result = null;
+    }
+    if (!result) {
+      output.textContent = "Lookup unavailable. Try again in a moment.";
+      return;
+    }
     if (!result.ok) {
       output.textContent = result.error;
       return;

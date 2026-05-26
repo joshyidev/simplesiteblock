@@ -38,6 +38,9 @@ export async function getState({ includeRawLists = false } = {}) {
     customRules: "",
     pendingRebuild: false,
     rulesBuiltAt: 0,
+    appliedSignature: "",
+    appliedListDomainCount: 0,
+    appliedCustomDomainCount: 0,
   };
   // Cached raw list bodies are stored per-list; callers should use getRawList()
   // instead of loading every body at once.
@@ -56,6 +59,10 @@ export async function getState({ includeRawLists = false } = {}) {
       typeof stored.customRules === "string" ? stored.customRules : "",
     pendingRebuild: Boolean(stored.pendingRebuild),
     rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
+    appliedSignature:
+      typeof stored.appliedSignature === "string" ? stored.appliedSignature : "",
+    appliedListDomainCount: Number(stored.appliedListDomainCount) || 0,
+    appliedCustomDomainCount: Number(stored.appliedCustomDomainCount) || 0,
   };
 }
 
@@ -109,6 +116,18 @@ export async function savePendingRebuild(pending) {
 
 export async function saveRulesBuiltAt(timestamp) {
   await ext.storage.local.set({ rulesBuiltAt: timestamp });
+}
+
+export async function saveAppliedSignature(signature) {
+  await ext.storage.local.set({ appliedSignature: signature });
+}
+
+export async function saveListDomainCount(count) {
+  await ext.storage.local.set({ appliedListDomainCount: count });
+}
+
+export async function saveCustomDomainCount(count) {
+  await ext.storage.local.set({ appliedCustomDomainCount: count });
 }
 
 export async function getStorageBytesInUse() {

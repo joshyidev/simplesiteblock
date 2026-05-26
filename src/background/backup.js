@@ -1,7 +1,8 @@
 import {
+  assertCustomRulesWithinLimit,
   normalizeListUrl,
   parseCustomRules,
-  rebuildRules,
+  rebuildAll,
   reconcileAlarms,
 } from "./lists.js";
 import { DEFAULT_SETTINGS, getState, removeRawList } from "./storage.js";
@@ -53,7 +54,7 @@ export function parseSettingsImport(text) {
   const settings = importSettings(payload.settings || {}, payload.password);
   const customRules =
     typeof payload.customRules === "string" ? payload.customRules : "";
-  parseCustomRules(customRules);
+  assertCustomRulesWithinLimit(parseCustomRules(customRules));
 
   const lists = sanitizeLists(payload.lists || []);
 
@@ -76,9 +77,9 @@ export async function importSettingsBackup(text) {
     rawLists: {},
     customRules: imported.customRules,
   });
-  // Imported lists arrive without cached bodies; rebuild applies custom rules
+  // Imported lists arrive without cached bodies; rebuildAll applies custom rules
   // now and flags pendingRebuild until the lists are fetched.
-  await rebuildRules();
+  await rebuildAll();
   await reconcileAlarms();
 }
 

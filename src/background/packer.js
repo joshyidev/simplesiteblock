@@ -15,17 +15,26 @@ const SAFE_RESOURCE_TYPES = [
   "other",
 ];
 
-export function packRules(blockHosts, allowHosts) {
+// idBase namespaces the rule IDs so independently-applied sets (lists vs custom
+// rules) never collide. The priority band lets one set outrank another; within a
+// band, allow > redirect/block by priority. Allow always wins via the highest.
+export function packRules(blockHosts, allowHosts, options = {}) {
+  const {
+    idBase = 1,
+    allowPriority = 10,
+    redirectPriority = 2,
+    blockPriority = 1,
+  } = options;
+
   const block = [...blockHosts].sort();
   const allow = [...allowHosts].sort();
   const rules = [];
-  let id = 1;
+  let id = idBase;
 
-  // Allow rules win globally via higher priority.
   for (let i = 0; i < allow.length; i += PACK_SIZE) {
     rules.push({
       id: id++,
-      priority: 10,
+      priority: allowPriority,
       action: { type: "allow" },
       condition: {
         requestDomains: allow.slice(i, i + PACK_SIZE),
@@ -39,7 +48,7 @@ export function packRules(blockHosts, allowHosts) {
     const batch = block.slice(i, i + PACK_SIZE);
     rules.push({
       id: id++,
-      priority: 2,
+      priority: redirectPriority,
       action: {
         type: "redirect",
         redirect: { extensionPath: BLOCK_PAGE_PATH },
@@ -48,7 +57,7 @@ export function packRules(blockHosts, allowHosts) {
     });
     rules.push({
       id: id++,
-      priority: 1,
+      priority: blockPriority,
       action: { type: "block" },
       condition: { requestDomains: batch, resourceTypes: SAFE_RESOURCE_TYPES },
     });

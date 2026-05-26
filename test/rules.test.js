@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeHosts } from "../src/background/normalize.js";
 import { packRules } from "../src/background/packer.js";
-import { applyDynamicRules } from "../src/background/rules.js";
+import { applyRuleSlice } from "../src/background/rules.js";
 
 test("normalizeHosts validates, lowercases, and converts IDNs", () => {
   const hosts = normalizeHosts([
@@ -83,12 +83,28 @@ test("packRules returns nothing when there are no hosts", () => {
   assert.deepEqual(packRules(new Set(), new Set()), []);
 });
 
-test("applyDynamicRules swaps the full rule set atomically", async () => {
+test("packRules honors a custom idBase and priority band", () => {
+  const rules = packRules(new Set(["block.test"]), new Set(["allow.test"]), {
+    idBase: 1000,
+    allowPriority: 30,
+    redirectPriority: 22,
+    blockPriority: 21,
+  });
+  assert.equal(rules[0].id, 1000);
+  assert.equal(rules[0].priority, 30);
+  assert.equal(rules[0].action.type, "allow");
+  assert.equal(rules[1].priority, 22);
+  assert.equal(rules[1].action.type, "redirect");
+  assert.equal(rules[2].priority, 21);
+  assert.equal(rules[2].action.type, "block");
+});
+
+test("applyRuleSlice removes existing rules in its ID range and adds new ones", async () => {
   const originalChrome = globalThis.chrome;
   let update = null;
   globalThis.chrome = {
     declarativeNetRequest: {
-      getDynamicRules: async () => [{ id: 5 }, { id: 9 }],
+      getDynamicRules: async () => [{ id: 1 }, { id: 5 }, { id: 1000000 }],
       updateDynamicRules: async (arg) => {
         update = arg;
       },
@@ -97,19 +113,41 @@ test("applyDynamicRules swaps the full rule set atomically", async () => {
 
   try {
     const newRules = packRules(new Set(["block.test"]), new Set());
-    await applyDynamicRules(newRules);
-    assert.deepEqual(update.removeRuleIds, [5, 9]);
+    await applyRuleSlice(1, 1000000, newRules);
+    // The custom-slice rule at 1000000 is outside [1, 1000000) and untouched.
+    assert.deepEqual(update.removeRuleIds, [1, 5]);
     assert.deepEqual(update.addRules, newRules);
   } finally {
     globalThis.chrome = originalChrome;
   }
 });
 
-test("applyDynamicRules is a no-op without the DNR API", async () => {
+test("applyRuleSlice only removes rules within its own slice", async () => {
+  const originalChrome = globalThis.chrome;
+  let update = null;
+  globalThis.chrome = {
+    declarativeNetRequest: {
+      getDynamicRules: async () => [{ id: 1 }, { id: 1000000 }, { id: 1000001 }],
+      updateDynamicRules: async (arg) => {
+        update = arg;
+      },
+    },
+  };
+
+  try {
+    await applyRuleSlice(1000000, Number.MAX_SAFE_INTEGER, []);
+    assert.deepEqual(update.removeRuleIds, [1000000, 1000001]);
+    assert.deepEqual(update.addRules, []);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("applyRuleSlice is a no-op without the DNR API", async () => {
   const originalChrome = globalThis.chrome;
   globalThis.chrome = {};
   try {
-    await applyDynamicRules([{ id: 1 }]);
+    await applyRuleSlice(1, 1000000, [{ id: 1 }]);
   } finally {
     globalThis.chrome = originalChrome;
   }

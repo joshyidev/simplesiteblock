@@ -3,12 +3,15 @@ import { parseAdblock } from "./parser/adblock.js";
 import { parseHosts } from "./parser/hosts.js";
 import { normalizeHosts } from "./normalize.js";
 import { packRules } from "./packer.js";
-import { applyDynamicRules } from "./rules.js";
+import { applyRuleSlice } from "./rules.js";
 import {
   getRawList,
   getState,
   removeRawList,
+  saveAppliedSignature,
+  saveCustomDomainCount,
   saveCustomRules,
+  saveListDomainCount,
   saveLists,
   savePendingRebuild,
   saveRawList,
@@ -18,6 +21,21 @@ import {
 export const ALARM_NAME = "update:index";
 const MAX_CONTENT_LENGTH_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES = 25 * 1024 * 1024;
+// The custom-rules box is for a handful of personal additions; bulk lists belong
+// in a subscription. This keeps it scoped and reserves rule budget for lists.
+const MAX_CUSTOM_DOMAINS = 1000;
+
+// Lists and custom rules occupy disjoint dynamic-rule ID ranges so each can be
+// applied independently. Custom rules use a higher priority band so they win
+// over subscribed lists (e.g. a custom block overrides a list's allow).
+const LIST_RULE_ID_BASE = 1;
+const CUSTOM_RULE_ID_BASE = 1_000_000;
+const CUSTOM_PRIORITIES = {
+  idBase: CUSTOM_RULE_ID_BASE,
+  allowPriority: 30,
+  redirectPriority: 22,
+  blockPriority: 21,
+};
 const FETCH_TIMEOUT_MS = 30000;
 
 let updateAllPromise = null;
@@ -46,7 +64,7 @@ export async function addList({ name, url }) {
   };
 
   await saveLists([...state.lists, list]);
-  await savePendingRebuild(true);
+  await recomputePending();
 }
 
 export function normalizeListUrl(value) {
@@ -69,7 +87,7 @@ export async function removeList(listId) {
   const state = await getState({ includeRawLists: false });
   await saveLists(state.lists.filter((list) => list.id !== listId));
   await removeRawList(listId);
-  await savePendingRebuild(true);
+  await recomputePending();
 }
 
 export async function updateListIdentity(listId, { name, url }) {
@@ -106,7 +124,7 @@ export async function updateListIdentity(listId, { name, url }) {
   if (!urlChanged) return lists;
 
   await removeRawList(listId);
-  await savePendingRebuild(true);
+  await recomputePending();
   return lists;
 }
 
@@ -116,7 +134,7 @@ export async function updateListSettings(listId, patch) {
     list.id === listId ? { ...list, ...patch } : list,
   );
   await saveLists(lists);
-  if ("enabled" in patch || "format" in patch) await savePendingRebuild(true);
+  await recomputePending();
 }
 
 export async function updateAllLists() {
@@ -131,21 +149,27 @@ export async function updateAllLists() {
 
 async function doUpdateAllLists() {
   await fetchAndStoreEnabledLists();
-  await rebuildRules();
+  // Rebuild both slices: this reapplies lists after the fetch and keeps the
+  // custom slice consistent (also self-heals rules left by older builds).
+  await rebuildAll();
 }
 
-// Rebuild the full dynamic rule set from cached list bodies plus custom rules
-// and apply it. Sets pendingRebuild when an enabled list has no cached body yet
-// (it needs a fetch before it can contribute rules).
-export async function rebuildRules() {
+// Apply both rule slices. Used on settings import, where lists and custom rules
+// both change at once.
+export async function rebuildAll() {
+  await rebuildListRules();
+  await rebuildCustomRules();
+}
+
+// Rebuild and apply the list rule slice from cached list bodies. Sets
+// pendingRebuild when an enabled list has no cached body yet (it needs a fetch
+// before it can contribute rules). Custom rules are a separate slice and are
+// untouched here.
+export async function rebuildListRules() {
   const state = await getState({ includeRawLists: false });
   const block = new Set();
   const allow = new Set();
   let pending = false;
-
-  if (state.customRules.trim()) {
-    addParsedHosts(parseCustomRules(state.customRules), block, allow);
-  }
 
   for (const list of state.lists) {
     if (!list.enabled) continue;
@@ -161,16 +185,68 @@ export async function rebuildRules() {
     }
   }
 
-  await applyDynamicRules(
-    packRules(normalizeHosts(block), normalizeHosts(allow)),
-  );
+  const blockHosts = normalizeHosts(block);
+  const rules = packRules(blockHosts, normalizeHosts(allow), {
+    idBase: LIST_RULE_ID_BASE,
+  });
+  await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
+  await saveListDomainCount(blockHosts.size);
   await saveRulesBuiltAt(Date.now());
+  await saveAppliedSignature(rebuildSignature(state));
   await savePendingRebuild(pending);
+}
+
+// Rebuild and apply only the custom rule slice (higher priority band). Cheap:
+// it never reads or reparses list bodies, so editing custom rules is unaffected
+// by how large the subscribed lists are.
+export async function rebuildCustomRules() {
+  const state = await getState({ includeRawLists: false });
+  const block = new Set();
+  const allow = new Set();
+  if (state.customRules.trim()) {
+    addParsedHosts(parseCustomRules(state.customRules), block, allow);
+  }
+
+  const blockHosts = normalizeHosts(block);
+  const rules = packRules(blockHosts, normalizeHosts(allow), CUSTOM_PRIORITIES);
+  await applyRuleSlice(CUSTOM_RULE_ID_BASE, Number.MAX_SAFE_INTEGER, rules);
+  await saveCustomDomainCount(blockHosts.size);
+  await saveRulesBuiltAt(Date.now());
 }
 
 function addParsedHosts(parsed, block, allow) {
   for (const host of parsed.block) block.add(host);
   for (const host of parsed.allow) allow.add(host);
+}
+
+// Fingerprint of the inputs that determine the applied list rule slice: which
+// lists are enabled, with their format. Custom rules are excluded — they live in
+// their own slice and apply immediately, so they never make lists "pending".
+function rebuildSignature(state) {
+  return JSON.stringify(
+    state.lists
+      .filter((list) => list.enabled)
+      .map((list) => `${list.id}|${list.format}`)
+      .sort(),
+  );
+}
+
+// Set pendingRebuild to reflect whether a rebuild would actually change the
+// applied rules: the config diverged from what was last applied, or an enabled
+// list still has no cached body to contribute. A net-zero edit (e.g. disable
+// then re-enable a list) lands back on the applied signature and clears pending.
+export async function recomputePending() {
+  const state = await getState({ includeRawLists: false });
+  let pending = rebuildSignature(state) !== state.appliedSignature;
+  if (!pending) {
+    for (const list of state.lists) {
+      if (list.enabled && (await getRawList(list.id)) === null) {
+        pending = true;
+        break;
+      }
+    }
+  }
+  await savePendingRebuild(pending);
 }
 
 async function fetchAndStoreEnabledLists() {
@@ -223,9 +299,20 @@ async function fetchAndStoreEnabledLists() {
 
 export async function updateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
-  parseCustomRules(customRules);
+  assertCustomRulesWithinLimit(parseCustomRules(customRules));
   await saveCustomRules(customRules);
-  await rebuildRules();
+  await rebuildCustomRules();
+}
+
+// Caps the custom-rules box at a handful of personal domains (bulk belongs in a
+// subscription). Throws so both the save and import paths reject over-limit input.
+export function assertCustomRulesWithinLimit(parsed) {
+  const domainCount = parsed.block.size + parsed.allow.size;
+  if (domainCount > MAX_CUSTOM_DOMAINS) {
+    throw new Error(
+      `Custom rules are limited to ${MAX_CUSTOM_DOMAINS} domains; found ${domainCount.toLocaleString()}. Put large lists in a subscription instead.`,
+    );
+  }
 }
 
 function countParsedText(text, format) {

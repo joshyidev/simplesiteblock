@@ -1,5 +1,6 @@
 import { extensionApi as ext } from "../extension_api.js";
 import { importSettingsBackup } from "./backup.js";
+import { lookupHost } from "./lookup.js";
 import { ensureDefaults } from "./storage.js";
 import {
   handleAlarm,
@@ -31,6 +32,10 @@ ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     );
     return true;
   }
+  if (message?.type === "ssb:lookup") {
+    void respondWithLookup(message.input, sendResponse);
+    return true;
+  }
   return false;
 });
 
@@ -57,5 +62,13 @@ async function respondWithCommand(command, sendResponse) {
       ok: false,
       error: error?.message || "Something went wrong.",
     });
+  }
+}
+
+async function respondWithLookup(input, sendResponse) {
+  try {
+    sendResponse(await lookupHost(input));
+  } catch {
+    sendResponse({ ok: false, error: "Lookup failed." });
   }
 }

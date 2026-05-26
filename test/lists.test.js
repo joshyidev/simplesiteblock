@@ -5,6 +5,8 @@ import {
   normalizeListUrl,
   parseCustomRules,
   parseListText,
+  rebuildListRules,
+  recomputePending,
   reconcileAlarms,
   removeList,
   updateAllLists,
@@ -505,6 +507,66 @@ test("updateListSettings with enabled change marks pending without recompiling",
   }
 });
 
+test("toggling a list off then on cancels out and clears pending", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example.com" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    // Establish the applied baseline: list enabled with a cached body.
+    await rebuildListRules();
+    assert.equal(store.pendingRebuild, false);
+
+    await updateListSettings("abc", { enabled: false });
+    assert.equal(store.pendingRebuild, true, "disabling diverges from applied");
+
+    await updateListSettings("abc", { enabled: true });
+    assert.equal(
+      store.pendingRebuild,
+      false,
+      "re-enabling returns to the applied signature",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("recomputePending stays pending when an enabled list lacks a body", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+  });
+  // Signature matches the enabled set, but no cached body exists yet.
+  store.appliedSignature = JSON.stringify(["abc|auto"]);
+  globalThis.chrome = chrome;
+
+  try {
+    await recomputePending();
+    assert.equal(store.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
 test("updateCustomRules validates and saves rules", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, written } = makeChromeMock();
@@ -515,13 +577,32 @@ test("updateCustomRules validates and saves rules", async () => {
     const rulesWrite = written.find((w) => "customRules" in w);
     assert.ok(rulesWrite, "customRules should have been saved");
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
-    const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.equal(indexWrite, undefined, "no compiled index is written");
-    // rebuildRules applies immediately, and with no enabled lists awaiting a
-    // fetch there is nothing left pending.
+    // Custom rules apply to their own slice immediately and never touch list
+    // pending state.
     const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should be written");
-    assert.equal(pendingWrite.pendingRebuild, false);
+    assert.equal(pendingWrite, undefined, "custom rules do not set pending");
+    const statsWrite = written.find((w) => "appliedCustomDomainCount" in w);
+    assert.ok(statsWrite, "custom rule stats should be written");
+    assert.equal(statsWrite.appliedCustomDomainCount, 2);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateCustomRules rejects more than 1000 domains", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, written } = makeChromeMock();
+  globalThis.chrome = chrome;
+  const rules = Array.from({ length: 1001 }, (_, i) => `d${i}.example`).join(
+    "\n",
+  );
+
+  try {
+    await assert.rejects(
+      () => updateCustomRules(rules),
+      /limited to 1000 domains/,
+    );
+    assert.equal(written.length, 0, "nothing is saved when over the limit");
   } finally {
     globalThis.chrome = originalChrome;
   }

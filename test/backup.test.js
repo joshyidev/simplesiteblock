@@ -100,6 +100,16 @@ test("settings import rejects compiled indexes", () => {
   );
 });
 
+test("settings import rejects more than 1000 custom domains", () => {
+  const customRules = Array.from({ length: 1001 }, (_, i) => `d${i}.example`).join(
+    "\n",
+  );
+  assert.throws(
+    () => parseSettingsImport(JSON.stringify(makePayload({ customRules }))),
+    /limited to 1000 domains/,
+  );
+});
+
 test("settings import rejects invalid custom rules", () => {
   assert.throws(
     () =>

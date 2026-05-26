@@ -20,16 +20,29 @@ on Chrome's `declarativeNetRequest` (DNR): parsed lists and custom rules are
 normalized, packed into dynamic rules, and applied by the browser. See `DNR.md`
 for the design.
 
-Blocking is rebuilt and reapplied by `rebuildRules()` in `lists.js` (combine all
-enabled lists' cached bodies + custom rules → normalize → pack → swap the full
-dynamic rule set). It runs on Update All (after fetch), on saving custom rules,
-and on settings import.
+Rules are applied as **two independent slices** with disjoint dynamic-rule ID
+ranges (see `lists.js`):
+
+- **Lists** (`rebuildListRules`, ID base 1, normal priority band): all enabled
+  lists' cached bodies → normalize → pack → swap the list slice.
+- **Custom rules** (`rebuildCustomRules`, ID base 1,000,000, higher priority
+  band): only the custom-rules text → normalize → pack → swap the custom slice.
+  Runs on saving custom rules. Never reads list bodies, so it's cheap regardless
+  of list size.
+
+`rebuildAll()` runs both and is used on Update All (after fetch) and settings
+import. `applyRuleSlice` removes a slice by its actual ID range (queried via
+`getDynamicRules`), so it self-heals stale rules from older builds. Custom rules
+use a higher priority band so they win over lists — e.g. a custom block
+overrides a list's allow. Allow still beats block within each band.
 
 Known gap: list CRUD (add/remove/enable/disable/edit) only sets `pendingRebuild`
-and does **not** reapply rules immediately — changes take effect on the next
-Update All. So a removed or disabled list keeps blocking until then.
-`pendingRebuild` means an enabled list has no cached body yet (needs a fetch
-before it can contribute rules), or a CRUD edit is awaiting Update All.
+and does **not** reapply the list slice immediately — changes take effect on the
+next Update All. So a removed or disabled list keeps blocking until then.
+`pendingRebuild` is recomputed against `appliedSignature` (a fingerprint of the
+enabled lists), so a net-zero edit (disable then re-enable) clears it; it stays
+set when an enabled list has no cached body yet. Custom rules apply immediately
+to their own slice and never affect `pendingRebuild`.
 
 ## Key Paths
 
