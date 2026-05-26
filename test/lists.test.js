@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addList,
+  assertListRedirectBudget,
   normalizeListUrl,
   parseCustomRules,
   parseListText,
@@ -587,6 +588,12 @@ test("updateCustomRules validates and saves rules", async () => {
   } finally {
     globalThis.chrome = originalChrome;
   }
+});
+
+test("assertListRedirectBudget throws past the unsafe-rule cap", () => {
+  assert.doesNotThrow(() => assertListRedirectBudget(0));
+  assert.doesNotThrow(() => assertListRedirectBudget(4000));
+  assert.throws(() => assertListRedirectBudget(10000), /rule limit/);
 });
 
 test("updateCustomRules rejects more than 1000 domains", async () => {

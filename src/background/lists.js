@@ -24,6 +24,12 @@ const MAX_TEXT_BYTES = 25 * 1024 * 1024;
 // The custom-rules box is for a handful of personal additions; bulk lists belong
 // in a subscription. This keeps it scoped and reserves rule budget for lists.
 const MAX_CUSTOM_DOMAINS = 1000;
+// Top-level blocks are `redirect` rules, which are "unsafe" in DNR and capped at
+// 5,000 across all dynamic rules. The packer emits one redirect rule per ~1,000
+// main-frame block domains, so this bounds blockable domains at ~5 million. We
+// reserve a little headroom for the (domain-capped) custom slice's redirects.
+const MAX_UNSAFE_DYNAMIC_RULES = 5000;
+const MAX_LIST_REDIRECT_RULES = MAX_UNSAFE_DYNAMIC_RULES - 10;
 
 // Lists and custom rules occupy disjoint dynamic-rule ID ranges so each can be
 // applied independently. Custom rules use a higher priority band so they win
@@ -189,6 +195,12 @@ export async function rebuildListRules() {
   const rules = packRules(blockHosts, normalizeHosts(allow), {
     idBase: LIST_RULE_ID_BASE,
   });
+  // Fail closed before touching DNR if we'd blow the unsafe-rule cap, so the
+  // user gets a clear message instead of a raw updateDynamicRules rejection and
+  // their existing rules stay applied.
+  assertListRedirectBudget(
+    rules.filter((rule) => rule.action.type === "redirect").length,
+  );
   await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
   await saveListDomainCount(blockHosts.size);
   await saveRulesBuiltAt(Date.now());
@@ -302,6 +314,16 @@ export async function updateCustomRules(rawRules) {
   assertCustomRulesWithinLimit(parseCustomRules(customRules));
   await saveCustomRules(customRules);
   await rebuildCustomRules();
+}
+
+// Guards against exceeding DNR's 5,000 unsafe (redirect) rule cap. Throws a
+// user-facing message rather than letting updateDynamicRules fail cryptically.
+export function assertListRedirectBudget(redirectRuleCount) {
+  if (redirectRuleCount > MAX_LIST_REDIRECT_RULES) {
+    throw new Error(
+      "Your enabled lists block more domains than Chrome's rule limit allows (about 5 million). Disable or remove some lists, then run Update All again.",
+    );
+  }
 }
 
 // Caps the custom-rules box at a handful of personal domains (bulk belongs in a
