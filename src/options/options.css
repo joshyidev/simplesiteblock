@@ -429,8 +429,8 @@ td:nth-child(6) {
 }
 
 .about-icon {
-  width: 128px;
-  height: 128px;
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
 }
 
