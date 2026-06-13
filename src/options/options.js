@@ -152,6 +152,7 @@ function renderApp(state) {
         <h2>Links</h2>
         <nav class="link-list" aria-label="Help and project links">
           <a href="https://github.com/joshyidev/simplesiteblock/wiki">Documentation</a>
+          <a href="https://github.com/joshyidev/simplesiteblock/releases">Changelog</a>
           <a href="https://github.com/joshyidev/simplesiteblock/issues">Bug report (GitHub)</a>
           <a href="https://github.com/joshyidev/simplesiteblock">Source code (MIT)</a>
           <a href="https://github.com/joshyidev/simplesiteblock/wiki/Privacy-Policy">Privacy Policy</a>
@@ -164,7 +165,7 @@ function renderApp(state) {
           <div>
             <p class="about-name">${escapeHtml(manifest.name)}</p>
             <p class="about-version">${escapeHtml(manifest.version)}</p>
-            <p class="about-version">Author: Joshua Yi</p>
+            <p class="about-version">Joshua Yi</p>
           </div>
         </div>
       </section>
@@ -344,6 +345,7 @@ function bindEvents(state) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       await saveSettings({ blockPageMessage: form.get("blockMessage") });
+      await boot();
       const status = app.querySelector("#blockMessageStatus");
       if (status) status.textContent = "Block page message saved.";
     });
@@ -352,6 +354,7 @@ function bindEvents(state) {
     .querySelector("#updateInterval")
     .addEventListener("change", async (event) => {
       await saveSettings({ updateIntervalDays: Number(event.target.value) });
+      await boot();
       setListsStatus("Auto-update interval saved.");
     });
 
