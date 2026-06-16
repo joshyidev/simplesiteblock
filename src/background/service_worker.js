@@ -50,11 +50,23 @@ ext.storage.onChanged.addListener((changes, areaName) => {
 
 registerNavigationGuard();
 
+// reconcileRules() reads the full dynamic ruleset (getDynamicRules), so keep it
+// off the per-wake path: applied rules only drift from config across an install/
+// reload (orphans inherited from a prior install) or a browser restart (rules
+// that vanished). Both are covered here. Plain navigation/message wakes skip it.
+ext.runtime.onInstalled.addListener(() => {
+  void reconcileRules();
+});
+ext.runtime.onStartup.addListener(() => {
+  void reconcileRules();
+});
+
 void initialize();
 
+// Runs on every worker wake. Kept cheap: small storage reads only, no
+// getDynamicRules. Reconciliation of applied rules is install/startup-scoped above.
 async function initialize() {
   await ensureDefaults();
-  await reconcileRules();
   await reconcileAlarms();
 }
 

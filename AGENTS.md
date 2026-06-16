@@ -54,29 +54,46 @@ to their own slice and never affect `pendingRebuild`.
 Startup reconciliation: dynamic rules persist in the browser keyed to the
 extension ID, so they can outlive the storage that produced them (an unpacked
 reload reuses the path-derived ID; a reset wipes storage but leaves the rule
-store). On boot, `reconcileRules()` (in `service_worker.js` `initialize()`)
-clears **orphaned** rules — list rules present when `appliedSignature` is empty
-(rebuildListRules never ran in this storage), or custom rules with no backing
-text — and restores rules that vanished though some were last applied
-(`appliedListDomainCount`/`appliedCustomDomainCount` > 0 but the slice is empty).
-It deliberately does **not** reapply a pending edit: a non-empty
-`appliedSignature` that merely diverges from current config is the documented
-CRUD gap above, left for the next Update All, not orphan drift.
+store). `reconcileRules()` clears **orphaned** rules — list rules present when
+`appliedSignature` is empty (rebuildListRules never ran in this storage), or
+custom rules with no backing text — and restores rules that vanished though some
+were last applied (`appliedListDomainCount`/`appliedCustomDomainCount` > 0 but the
+slice is empty). It deliberately does **not** reapply a pending edit: a non-empty
+`appliedSignature` that merely diverges from current config is the documented CRUD
+gap above, left for the next Update All, not orphan drift. It runs on
+`runtime.onInstalled` and `runtime.onStartup` only — **not** on every worker wake
+— because applied rules only drift across an install/reload or a browser restart,
+and it reads the full ruleset via `getDynamicRules` (kept off the hot path). The
+per-wake `initialize()` does only cheap storage work (`ensureDefaults`,
+`reconcileAlarms`).
 
-Brave backstop (`navigation_guard.js`): Brave applies DNR `redirect`-to-block-page
-rules to top-level navigations unreliably — the navigation can hang indefinitely
-(reproducibly when a block page is already open in another tab). Chrome is fine.
-On Brave **only** (gated synchronously on `navigator.brave`, so Chrome registers
-nothing and pays nothing), a `webNavigation.onBeforeNavigate` listener asks
-`declarativeNetRequest.testMatchOutcome()` whether the URL hits a block (redirect)
-rule and, if so, redirects the tab with `tabs.update` — a direct navigation, which
-does not trigger Brave's bug. The block lists are NOT duplicated: testMatchOutcome
-queries the same dynamic rules (DNR stays the source of truth). No flash: the DNR
-rule still holds the original request (blocked content never loads), so this only
-guarantees the block page commits. The listener must be registered synchronously
-at worker top level (so the event wakes a dormant MV3 worker), hence the sync
-`navigator.brave` gate rather than the async `navigator.brave.isBrave()`. Requires
-the `webNavigation` permission (not `tabs`: setting a tab URL does not need it).
+Navigation guard (`navigation_guard.js`): Brave applies DNR `redirect`-to-block-
+page rules to top-level navigations unreliably — the navigation can hang
+indefinitely (reproducibly when a block page is already open in another tab).
+Chrome is fine. A `webNavigation.onBeforeNavigate` listener (registered in **all**
+browsers as one unified path) asks `declarativeNetRequest.testMatchOutcome()`
+whether the URL hits a block (redirect) rule and, if so, redirects the tab with
+`tabs.update` — a direct navigation, which does not trigger Brave's bug. On Brave
+this is the thing that makes blocking reliable; in Chrome DNR has usually already
+redirected, so the `tabs.update` is a harmless re-navigation to the same block
+page. A non-blocked navigation costs just one `testMatchOutcome` and exits. The
+block lists are NOT duplicated: testMatchOutcome queries the same dynamic rules
+(DNR stays the source of truth; a small `rulesBuiltAt`-keyed cache maps matched
+ruleIds to action so `@@` allow exceptions don't trigger). No flash: the DNR rule
+still holds the original request (blocked content never loads), so this only
+guarantees the block page commits.
+
+The `blockAction` setting (`"redirect"` default, or `"close"`) decides what the
+guard does on a confirmed block: redirect to the block page (default), or
+`tabs.remove` the tab. Only the guard can close a tab — DNR has no close action,
+so in `"close"` mode the DNR redirect still fires (a brief block-page load is
+possible in Chrome before the tab closes; the blocked content never loads).
+Closing is unconditional — closing the blocked URL's only tab will close its
+window. `tabs.remove` uses only a tab id, so no extra `tabs` permission is needed.
+
+The listener must be registered synchronously
+at worker top level so the event can wake a dormant MV3 worker. Requires the
+`webNavigation` permission (not `tabs`: setting a tab URL does not need it).
 
 ## Key Paths
 

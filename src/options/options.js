@@ -90,16 +90,14 @@ function renderApp(state) {
 
       <section class="panel">
         <h2>Block page</h2>
-        <p class="muted section-desc">Add a message to the block page. Leave blank to use the default.</p>
-        <form id="blockMessageForm" class="custom-rules-form">
-          <label class="field">
-            <input id="blockMessage" name="blockMessage" type="text" aria-label="Block page message" placeholder="Message shown on the block page" value="${escapeHtml(state.settings.blockPageMessage)}">
-          </label>
-          <div class="form-actions custom-rules-actions">
-            <button id="saveBlockMessageButton" class="fit" type="submit">Save message</button>
-            <p class="custom-rules-status muted" id="blockMessageStatus" role="status" aria-live="polite"></p>
-          </div>
-        </form>
+        <label class="field-inline block-action">
+          When a site is blocked
+          <select id="blockAction">
+            <option value="redirect" ${state.settings.blockAction !== "close" ? "selected" : ""}>Show block page</option>
+            <option value="close" ${state.settings.blockAction === "close" ? "selected" : ""}>Close the tab</option>
+          </select>
+        </label>
+        <p class="block-action-status muted" id="blockActionStatus" role="status" aria-live="polite"></p>
       </section>
 
       <section class="panel">
@@ -340,23 +338,25 @@ function bindEvents(state) {
     });
 
   app
-    .querySelector("#blockMessageForm")
-    .addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const form = new FormData(event.currentTarget);
-      await saveSettings({ blockPageMessage: form.get("blockMessage") });
-      await boot();
-      const status = app.querySelector("#blockMessageStatus");
-      if (status) status.textContent = "Block page message saved.";
-    });
-
-  app
     .querySelector("#updateInterval")
     .addEventListener("change", async (event) => {
       await saveSettings({ updateIntervalDays: Number(event.target.value) });
       await boot();
       setListsStatus("Auto-update interval saved.");
     });
+
+  app.querySelector("#blockAction").addEventListener("change", async (event) => {
+    const blockAction = event.target.value === "close" ? "close" : "redirect";
+    await saveSettings({ blockAction });
+    await boot();
+    const status = app.querySelector("#blockActionStatus");
+    if (status) {
+      status.textContent =
+        blockAction === "close"
+          ? "Blocked sites will close the tab."
+          : "Blocked sites will show the block page.";
+    }
+  });
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
     setListsStatus("Updating lists...");

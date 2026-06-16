@@ -88,10 +88,9 @@ function exportSettings(settings) {
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
-    blockPageMessage:
-      typeof settings.blockPageMessage === "string"
-        ? settings.blockPageMessage
-        : DEFAULT_SETTINGS.blockPageMessage,
+    blockAction: validBlockAction(settings.blockAction)
+      ? settings.blockAction
+      : DEFAULT_SETTINGS.blockAction,
   };
 }
 
@@ -111,10 +110,9 @@ function importSettings(settings, password) {
   return {
     ...DEFAULT_SETTINGS,
     updateIntervalDays: settings.updateIntervalDays,
-    blockPageMessage:
-      typeof settings.blockPageMessage === "string"
-        ? settings.blockPageMessage
-        : DEFAULT_SETTINGS.blockPageMessage,
+    blockAction: validBlockAction(settings.blockAction)
+      ? settings.blockAction
+      : DEFAULT_SETTINGS.blockAction,
     ...passwordSettings,
     lastUnlockAt: 0,
   };
@@ -187,4 +185,8 @@ function sanitizeLists(lists) {
 
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
+}
+
+function validBlockAction(value) {
+  return value === "redirect" || value === "close";
 }

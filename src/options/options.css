@@ -211,12 +211,14 @@ h3 {
   gap: 10px;
 }
 
-.custom-rules-status {
+.custom-rules-status,
+.block-action-status {
   margin: 0;
   font-size: 13px;
 }
 
-.custom-rules-status:empty {
+.custom-rules-status:empty,
+.block-action-status:empty {
   display: none;
 }
 
@@ -388,6 +390,10 @@ td:nth-child(6) {
 .section-desc {
   margin: 0 0 12px;
   font-size: 13px;
+}
+
+.block-action {
+  margin-bottom: 12px;
 }
 
 .backup-status {

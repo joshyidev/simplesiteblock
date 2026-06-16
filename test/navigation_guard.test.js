@@ -9,11 +9,14 @@ function makeChrome({
   matchedRules = [],
   dynamicRules = [],
   rulesBuiltAt = 1,
+  blockAction = "redirect",
 } = {}) {
   const tabUpdates = [];
+  const tabRemovals = [];
   const testMatchCalls = [];
   return {
     tabUpdates,
+    tabRemovals,
     testMatchCalls,
     chrome: {
       declarativeNetRequest: {
@@ -24,11 +27,20 @@ function makeChrome({
         getDynamicRules: async () => dynamicRules,
       },
       storage: {
-        local: { get: async (defaults) => ({ ...defaults, rulesBuiltAt }) },
+        local: {
+          get: async (defaults) => ({
+            ...defaults,
+            rulesBuiltAt,
+            settings: { blockAction },
+          }),
+        },
       },
       tabs: {
         update: async (tabId, props) => {
           tabUpdates.push({ tabId, props });
+        },
+        remove: async (tabId) => {
+          tabRemovals.push(tabId);
         },
       },
       runtime: { getURL: (path) => `chrome-extension://testid${path}` },
@@ -58,6 +70,29 @@ test("guardNavigation redirects a blocked top-level navigation to the block page
       },
     ]);
     assert.equal(mock.testMatchCalls[0].type, "main_frame");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("guardNavigation closes the tab when blockAction is close", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChrome({
+    matchedRules: [{ ruleId: 1000000, rulesetId: "_dynamic" }],
+    dynamicRules: [{ id: 1000000, action: { type: "redirect" } }],
+    rulesBuiltAt: 21,
+    blockAction: "close",
+  });
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await guardNavigation({
+      frameId: 0,
+      url: "https://example.com/",
+      tabId: 5,
+    });
+    assert.deepEqual(mock.tabRemovals, [5]);
+    assert.equal(mock.tabUpdates.length, 0, "does not also redirect");
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -154,27 +189,36 @@ test("guardNavigation leaves DNR to handle it when testMatchOutcome is unavailab
   }
 });
 
-test("registerNavigationGuard only registers the listener on Brave", () => {
+test("registerNavigationGuard registers the listener in every browser", () => {
   const originalChrome = globalThis.chrome;
   const originalNavigator = globalThis.navigator;
   const added = [];
-  const chromeMock = {
+  globalThis.chrome = {
     webNavigation: {
       onBeforeNavigate: { addListener: (fn) => added.push(fn) },
     },
   };
-  globalThis.chrome = chromeMock;
 
   try {
-    globalThis.navigator = {}; // no .brave -> Chrome
+    globalThis.navigator = {}; // Chrome (no navigator.brave)
     registerNavigationGuard();
-    assert.equal(added.length, 0, "no listener off Brave");
+    assert.equal(added.length, 1, "registers without navigator.brave");
 
-    globalThis.navigator = { brave: {} }; // Brave injects navigator.brave
+    globalThis.navigator = { brave: {} }; // Brave
     registerNavigationGuard();
-    assert.equal(added.length, 1, "listener registered on Brave");
+    assert.equal(added.length, 2, "registers on Brave too");
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.navigator = originalNavigator;
+  }
+});
+
+test("registerNavigationGuard no-ops when webNavigation is unavailable", () => {
+  const originalChrome = globalThis.chrome;
+  globalThis.chrome = {};
+  try {
+    registerNavigationGuard(); // must not throw
+  } finally {
+    globalThis.chrome = originalChrome;
   }
 });

@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   password: "",
   lastUnlockAt: 0,
   updateIntervalDays: 7,
-  blockPageMessage: "",
+  blockAction: "redirect",
 });
 
 export async function ensureDefaults() {
