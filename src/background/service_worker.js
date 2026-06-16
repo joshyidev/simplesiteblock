@@ -1,10 +1,12 @@
 import { extensionApi as ext } from "../extension_api.js";
 import { importSettingsBackup } from "./backup.js";
 import { lookupHost } from "./lookup.js";
+import { registerNavigationGuard } from "./navigation_guard.js";
 import { ensureDefaults } from "./storage.js";
 import {
   handleAlarm,
   reconcileAlarms,
+  reconcileRules,
   updateAllLists,
   updateCustomRules,
 } from "./lists.js";
@@ -46,10 +48,13 @@ ext.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
+registerNavigationGuard();
+
 void initialize();
 
 async function initialize() {
   await ensureDefaults();
+  await reconcileRules();
   await reconcileAlarms();
 }
 

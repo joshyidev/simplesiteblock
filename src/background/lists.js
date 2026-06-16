@@ -104,7 +104,8 @@ export async function updateListIdentity(listId, { name, url }) {
   if (
     state.lists.some(
       (list) =>
-        list.id !== listId && normalizeStoredListUrl(list.url) === normalizedUrl,
+        list.id !== listId &&
+        normalizeStoredListUrl(list.url) === normalizedUrl,
     )
   ) {
     throw new Error("This list has already been added.");
@@ -240,6 +241,30 @@ function rebuildSignature(state) {
       .map((list) => `${list.id}|${list.format}`)
       .sort(),
   );
+}
+
+export async function reconcileRules() {
+  if (!ext.declarativeNetRequest) return;
+  const state = await getState({ includeRawLists: false });
+  const existing = await ext.declarativeNetRequest.getDynamicRules();
+  const hasListRules = existing.some(
+    (rule) => rule.id >= LIST_RULE_ID_BASE && rule.id < CUSTOM_RULE_ID_BASE,
+  );
+  const hasCustomRules = existing.some(
+    (rule) => rule.id >= CUSTOM_RULE_ID_BASE,
+  );
+
+  const customOrphaned = state.customRules.trim() === "" && hasCustomRules;
+  const customMissing = state.appliedCustomDomainCount > 0 && !hasCustomRules;
+  if (customOrphaned || customMissing) {
+    await rebuildCustomRules();
+  }
+
+  const orphanedListRules = state.appliedSignature === "" && hasListRules;
+  const listRulesMissing = state.appliedListDomainCount > 0 && !hasListRules;
+  if (orphanedListRules || listRulesMissing) {
+    await rebuildListRules();
+  }
 }
 
 // Set pendingRebuild to reflect whether a rebuild would actually change the

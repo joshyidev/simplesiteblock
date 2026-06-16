@@ -9,6 +9,7 @@ import {
   rebuildListRules,
   recomputePending,
   reconcileAlarms,
+  reconcileRules,
   removeList,
   updateAllLists,
   updateCustomRules,
@@ -133,6 +134,7 @@ function makeChromeMock({
   rawLists = {},
   customRules = "",
   settings = {},
+  dynamicRules = null,
 } = {}) {
   const store = {
     settings: { updateIntervalDays: 0, ...settings },
@@ -146,7 +148,7 @@ function makeChromeMock({
   }
   const written = [];
   const removed = [];
-  return {
+  const result = {
     chrome: {
       storage: {
         local: {
@@ -178,6 +180,26 @@ function makeChromeMock({
     removed,
     store,
   };
+
+  // Opt-in declarativeNetRequest mock backed by a mutable rule store, so reconcile
+  // tests can observe which dynamic rules get added or removed.
+  if (dynamicRules) {
+    let rules = [...dynamicRules];
+    const dnrUpdates = [];
+    result.chrome.declarativeNetRequest = {
+      getDynamicRules: async () => rules,
+      updateDynamicRules: async ({ removeRuleIds = [], addRules = [] }) => {
+        dnrUpdates.push({ removeRuleIds, addRules });
+        rules = rules
+          .filter((rule) => !removeRuleIds.includes(rule.id))
+          .concat(addRules);
+      },
+    };
+    result.dnrUpdates = dnrUpdates;
+    result.getRules = () => rules;
+  }
+
+  return result;
 }
 
 test("addList saves list metadata and marks pending without fetching", async () => {
@@ -243,8 +265,14 @@ test("updateListIdentity changes name without clearing cached list body", async 
     assert.equal(store.lists[0].lastError, "previous error");
     assert.equal(store.lists[0].ruleCount, 12);
     assert.equal(store[rawListStorageKey("abc")], "0.0.0.0 ads.example");
-    assert.equal(written.some((w) => "rawLists" in w), false);
-    assert.equal(written.some((w) => "pendingRebuild" in w), false);
+    assert.equal(
+      written.some((w) => "rawLists" in w),
+      false,
+    );
+    assert.equal(
+      written.some((w) => "pendingRebuild" in w),
+      false,
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -384,10 +412,7 @@ test("updateAllLists fetches full body when validators exist without cached body
     await updateAllLists();
     assert.equal(requestHeaders["If-None-Match"], undefined);
     assert.equal(requestHeaders["If-Modified-Since"], undefined);
-    assert.equal(
-      store[rawListStorageKey("abc")],
-      "0.0.0.0 ads.example.com",
-    );
+    assert.equal(store[rawListStorageKey("abc")], "0.0.0.0 ads.example.com");
     assert.equal(store.lists[0].etag, '"fresh"');
     assert.equal(store.lists[0].lastError, null);
   } finally {
@@ -710,6 +735,138 @@ test("reconcileAlarms clears and recreates alarm when interval changes", async (
       ),
       "alarm should be recreated with new period",
     );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules clears orphaned list rules inherited from a prior install", async () => {
+  const originalChrome = globalThis.chrome;
+  // Fresh storage (no lists, empty applied signature) but the browser still has
+  // list rules plus a legitimate custom rule from before a reset/reinstall.
+  const mock = makeChromeMock({
+    customRules: "example.com",
+    dynamicRules: [{ id: 1 }, { id: 2 }, { id: 1000000 }],
+  });
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    // The orphaned list-slice rules (ids 1, 2) are cleared; the custom rule stays.
+    assert.deepEqual(
+      mock.getRules().map((r) => r.id),
+      [1000000],
+    );
+    assert.equal(mock.dnrUpdates.length, 1, "only the list slice is rebuilt");
+    assert.deepEqual(mock.dnrUpdates[0].removeRuleIds, [1, 2]);
+    assert.deepEqual(mock.dnrUpdates[0].addRules, []);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules clears orphaned custom rules when there is no custom text", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({ dynamicRules: [{ id: 1000000 }] });
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.deepEqual(mock.getRules(), []);
+    assert.equal(mock.dnrUpdates.length, 1, "only the custom slice is rebuilt");
+    assert.deepEqual(mock.dnrUpdates[0].removeRuleIds, [1000000]);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules leaves a healthy applied state untouched", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example.com" },
+    customRules: "keep.example",
+    dynamicRules: [{ id: 2 }, { id: 1000000 }],
+  });
+  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
+  mock.store.appliedListDomainCount = 1;
+  mock.store.appliedCustomDomainCount = 1;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.equal(mock.dnrUpdates.length, 0, "no slice should be rebuilt");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules does not disturb a pending list edit", async () => {
+  const originalChrome = globalThis.chrome;
+  // A disabled list whose rules were applied while it was enabled: this is the
+  // documented CRUD gap (it keeps blocking until Update All), not orphan drift.
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: false,
+      },
+    ],
+    dynamicRules: [{ id: 2 }],
+  });
+  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
+  mock.store.appliedListDomainCount = 1;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.equal(
+      mock.dnrUpdates.length,
+      0,
+      "a pending edit must wait for Update All, not be reapplied on startup",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules restores list rules that vanished though some were applied", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "0.0.0.0 ads.example.com" },
+    dynamicRules: [],
+  });
+  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
+  mock.store.appliedListDomainCount = 1;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    const listRules = mock
+      .getRules()
+      .filter((r) => r.id >= 1 && r.id < 1000000);
+    assert.equal(listRules.length, 1, "the list slice is repopulated");
+    assert.equal(listRules[0].action.type, "redirect");
   } finally {
     globalThis.chrome = originalChrome;
   }

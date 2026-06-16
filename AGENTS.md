@@ -51,6 +51,33 @@ enabled lists), so a net-zero edit (disable then re-enable) clears it; it stays
 set when an enabled list has no cached body yet. Custom rules apply immediately
 to their own slice and never affect `pendingRebuild`.
 
+Startup reconciliation: dynamic rules persist in the browser keyed to the
+extension ID, so they can outlive the storage that produced them (an unpacked
+reload reuses the path-derived ID; a reset wipes storage but leaves the rule
+store). On boot, `reconcileRules()` (in `service_worker.js` `initialize()`)
+clears **orphaned** rules — list rules present when `appliedSignature` is empty
+(rebuildListRules never ran in this storage), or custom rules with no backing
+text — and restores rules that vanished though some were last applied
+(`appliedListDomainCount`/`appliedCustomDomainCount` > 0 but the slice is empty).
+It deliberately does **not** reapply a pending edit: a non-empty
+`appliedSignature` that merely diverges from current config is the documented
+CRUD gap above, left for the next Update All, not orphan drift.
+
+Brave backstop (`navigation_guard.js`): Brave applies DNR `redirect`-to-block-page
+rules to top-level navigations unreliably — the navigation can hang indefinitely
+(reproducibly when a block page is already open in another tab). Chrome is fine.
+On Brave **only** (gated synchronously on `navigator.brave`, so Chrome registers
+nothing and pays nothing), a `webNavigation.onBeforeNavigate` listener asks
+`declarativeNetRequest.testMatchOutcome()` whether the URL hits a block (redirect)
+rule and, if so, redirects the tab with `tabs.update` — a direct navigation, which
+does not trigger Brave's bug. The block lists are NOT duplicated: testMatchOutcome
+queries the same dynamic rules (DNR stays the source of truth). No flash: the DNR
+rule still holds the original request (blocked content never loads), so this only
+guarantees the block page commits. The listener must be registered synchronously
+at worker top level (so the event wakes a dormant MV3 worker), hence the sync
+`navigator.brave` gate rather than the async `navigator.brave.isBrave()`. Requires
+the `webNavigation` permission (not `tabs`: setting a tab URL does not need it).
+
 ## Key Paths
 
 - `manifest/chrome.json`: extension entry point, permissions, and manifest data.
@@ -58,7 +85,10 @@ to their own slice and never affect `pendingRebuild`.
 - `src/background/service_worker.js`: alarms, list-update/import message
   handlers, and background event wiring.
 - `src/background/lists.js`: list fetching, validation, parsing, update
-  scheduling, list metadata edits, and pending rebuild state.
+  scheduling, list metadata edits, pending rebuild state, and startup rule
+  reconciliation.
+- `src/background/navigation_guard.js`: Brave-only `onBeforeNavigate` backstop for
+  Brave's unreliable DNR top-level redirect (see Status).
 - `src/background/storage.js`: typed defaults and wrappers around extension
   local storage.
 - `src/background/backup.js`: settings export/import validation.
