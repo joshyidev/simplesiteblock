@@ -71,17 +71,28 @@ Navigation guard (`navigation_guard.js`): Brave applies DNR `redirect`-to-block-
 page rules to top-level navigations unreliably — the navigation can hang
 indefinitely (reproducibly when a block page is already open in another tab).
 Chrome is fine. A `webNavigation.onBeforeNavigate` listener (registered in **all**
-browsers as one unified path) asks `declarativeNetRequest.testMatchOutcome()`
-whether the URL hits a block (redirect) rule and, if so, redirects the tab with
-`tabs.update` — a direct navigation, which does not trigger Brave's bug. On Brave
-this is the thing that makes blocking reliable; in Chrome DNR has usually already
-redirected, so the `tabs.update` is a harmless re-navigation to the same block
-page. A non-blocked navigation costs just one `testMatchOutcome` and exits. The
-block lists are NOT duplicated: testMatchOutcome queries the same dynamic rules
-(DNR stays the source of truth; a small `rulesBuiltAt`-keyed cache maps matched
-ruleIds to action so `@@` allow exceptions don't trigger). No flash: the DNR rule
-still holds the original request (blocked content never loads), so this only
-guarantees the block page commits.
+browsers as one unified path) decides whether the URL is blocked and, if so,
+redirects the tab with `tabs.update` — a direct navigation, which does not trigger
+Brave's bug. On Brave this is the thing that makes blocking reliable; in Chrome
+DNR has usually already redirected, so the `tabs.update` is a harmless
+re-navigation to the same block page. No flash: the DNR rule still holds the
+original request (blocked content never loads), so this only guarantees the block
+page commits.
+
+The guard does **not** use `declarativeNetRequest.testMatchOutcome()` — that API
+is only available to **unpacked** extensions, so it throws on a Web Store install
+and the guard would silently never fire (the bug that made both `"close"` mode and
+the Brave backstop fail in production). Instead the guard maintains its own host
+matcher: each rebuild persists the same normalized block/allow host sets that
+produced the DNR rules (`saveGuardHosts` per slice in `lists.js`; storage keys
+`guardHostsList`/`guardHostsCustom`), and the guard subtree-matches the navigation
+host against them. This means the lists ARE duplicated in storage (DNR is still the
+applied source of truth; the host sets are a parallel cache kept in sync on every
+rebuild, including reconciliation and import). The matcher is held in memory keyed
+by `rulesBuiltAt`, so a non-blocked navigation costs one cheap storage read at most
+and the host sets reload only when the rules change. Precedence mirrors the DNR
+priority bands: custom allow > custom block > list allow > list block, so `@@`
+allow exceptions and custom-over-list overrides resolve identically to DNR.
 
 The `blockAction` setting (`"redirect"` default, or `"close"`) decides what the
 guard does on a confirmed block: redirect to the block page (default), or
@@ -172,8 +183,9 @@ Load the Chrome extension manually:
 - The global list update alarm is named `update:index`. Be careful when changing
   alarm names because old extension installs may have persisted alarms.
 - List fetches reject obvious HTML and enforce response size limits.
-- Settings exports intentionally omit derived/cache data such as `pendingRebuild`
-  and raw list bodies. Imports must still reject a `compiledIndex` field for
+- Settings exports intentionally omit derived/cache data such as `pendingRebuild`,
+  raw list bodies, and the navigation guard's `guardHostsList`/`guardHostsCustom`
+  sets (rebuilt on import). Imports must still reject a `compiledIndex` field for
   backward compatibility with v1 exports.
 - The password lock is a personal accountability gate on the options page, not a
   security boundary. Passwords are stored as plaintext settings when enabled.

@@ -568,6 +568,49 @@ test("toggling a list off then on cancels out and clears pending", async () => {
   }
 });
 
+test("rebuildListRules persists guard host sets for the navigation guard", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "||ads.example.com^\n@@good.example.com" },
+  });
+  globalThis.chrome = chrome;
+
+  try {
+    await rebuildListRules();
+    assert.deepEqual(store.guardHostsList, {
+      block: ["ads.example.com"],
+      allow: ["good.example.com"],
+    });
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateCustomRules persists guard host sets for the navigation guard", async () => {
+  const originalChrome = globalThis.chrome;
+  const { chrome, store } = makeChromeMock();
+  globalThis.chrome = chrome;
+
+  try {
+    await updateCustomRules("blocked.example.com\n@@allowed.example.com");
+    assert.deepEqual(store.guardHostsCustom, {
+      block: ["blocked.example.com"],
+      allow: ["allowed.example.com"],
+    });
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
 test("recomputePending stays pending when an enabled list lacks a body", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, store } = makeChromeMock({

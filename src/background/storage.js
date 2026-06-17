@@ -131,6 +131,34 @@ export async function saveCustomDomainCount(count) {
   await ext.storage.local.set({ appliedCustomDomainCount: count });
 }
 
+function guardHostsKey(slice) {
+  return slice === "custom" ? "guardHostsCustom" : "guardHostsList";
+}
+
+export async function saveGuardHosts(slice, { block, allow }) {
+  await ext.storage.local.set({
+    [guardHostsKey(slice)]: { block: [...block], allow: [...allow] },
+  });
+}
+
+export async function getGuardHosts() {
+  const stored = await ext.storage.local.get({
+    guardHostsList: { block: [], allow: [] },
+    guardHostsCustom: { block: [], allow: [] },
+  });
+  return {
+    list: coerceGuardHosts(stored.guardHostsList),
+    custom: coerceGuardHosts(stored.guardHostsCustom),
+  };
+}
+
+function coerceGuardHosts(value) {
+  return {
+    block: Array.isArray(value?.block) ? value.block : [],
+    allow: Array.isArray(value?.allow) ? value.allow : [],
+  };
+}
+
 export async function getStorageBytesInUse() {
   if (!ext.storage.local.getBytesInUse) return null;
   return ext.storage.local.getBytesInUse(null);

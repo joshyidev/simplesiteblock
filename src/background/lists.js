@@ -11,6 +11,7 @@ import {
   saveAppliedSignature,
   saveCustomDomainCount,
   saveCustomRules,
+  saveGuardHosts,
   saveListDomainCount,
   saveLists,
   savePendingRebuild,
@@ -192,7 +193,8 @@ export async function rebuildListRules() {
   }
 
   const blockHosts = normalizeHosts(block);
-  const rules = packRules(blockHosts, normalizeHosts(allow), {
+  const allowHosts = normalizeHosts(allow);
+  const rules = packRules(blockHosts, allowHosts, {
     idBase: LIST_RULE_ID_BASE,
   });
   // Fail closed before touching DNR if we'd blow the unsafe-rule cap, so the
@@ -203,6 +205,9 @@ export async function rebuildListRules() {
   );
   await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
   await saveListDomainCount(blockHosts.size);
+  // Persist the host sets for the navigation guard before bumping rulesBuiltAt,
+  // which is how the guard knows to reload them.
+  await saveGuardHosts("list", { block: blockHosts, allow: allowHosts });
   await saveRulesBuiltAt(Date.now());
   await saveAppliedSignature(rebuildSignature(state));
   await savePendingRebuild(pending);
@@ -220,9 +225,11 @@ export async function rebuildCustomRules() {
   }
 
   const blockHosts = normalizeHosts(block);
-  const rules = packRules(blockHosts, normalizeHosts(allow), CUSTOM_PRIORITIES);
+  const allowHosts = normalizeHosts(allow);
+  const rules = packRules(blockHosts, allowHosts, CUSTOM_PRIORITIES);
   await applyRuleSlice(CUSTOM_RULE_ID_BASE, Number.MAX_SAFE_INTEGER, rules);
   await saveCustomDomainCount(blockHosts.size);
+  await saveGuardHosts("custom", { block: blockHosts, allow: allowHosts });
   await saveRulesBuiltAt(Date.now());
 }
 

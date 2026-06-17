@@ -1,38 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildMatcher,
   guardNavigation,
   registerNavigationGuard,
 } from "../src/background/navigation_guard.js";
 
 function makeChrome({
-  matchedRules = [],
-  dynamicRules = [],
+  listBlock = [],
+  listAllow = [],
+  customBlock = [],
+  customAllow = [],
   rulesBuiltAt = 1,
   blockAction = "redirect",
 } = {}) {
   const tabUpdates = [];
   const tabRemovals = [];
-  const testMatchCalls = [];
+  const store = {
+    rulesBuiltAt,
+    settings: { blockAction },
+    guardHostsList: { block: listBlock, allow: listAllow },
+    guardHostsCustom: { block: customBlock, allow: customAllow },
+  };
   return {
     tabUpdates,
     tabRemovals,
-    testMatchCalls,
     chrome: {
-      declarativeNetRequest: {
-        testMatchOutcome: async (request) => {
-          testMatchCalls.push(request);
-          return { matchedRules };
-        },
-        getDynamicRules: async () => dynamicRules,
-      },
       storage: {
         local: {
-          get: async (defaults) => ({
-            ...defaults,
-            rulesBuiltAt,
-            settings: { blockAction },
-          }),
+          get: async (defaults) => {
+            const out = {};
+            for (const key of Object.keys(defaults)) {
+              out[key] = key in store ? store[key] : defaults[key];
+            }
+            return out;
+          },
         },
       },
       tabs: {
@@ -48,145 +50,130 @@ function makeChrome({
   };
 }
 
-test("guardNavigation redirects a blocked top-level navigation to the block page", async () => {
+async function withChrome(mock, fn) {
   const originalChrome = globalThis.chrome;
-  const mock = makeChrome({
-    matchedRules: [{ ruleId: 1000000, rulesetId: "_dynamic" }],
-    dynamicRules: [{ id: 1000000, action: { type: "redirect" } }],
-    rulesBuiltAt: 11,
-  });
   globalThis.chrome = mock.chrome;
-
   try {
-    await guardNavigation({
-      frameId: 0,
-      url: "https://example.com/",
-      tabId: 5,
-    });
+    await fn();
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+}
+
+test("guardNavigation redirects a blocked top-level navigation to the block page", async () => {
+  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 11 });
+  await withChrome(mock, async () => {
+    await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 5 });
     assert.deepEqual(mock.tabUpdates, [
       {
         tabId: 5,
         props: { url: "chrome-extension://testid/src/blocked/blocked.html" },
       },
     ]);
-    assert.equal(mock.testMatchCalls[0].type, "main_frame");
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  });
+});
+
+test("guardNavigation blocks subdomains of a listed host", async () => {
+  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 14 });
+  await withChrome(mock, async () => {
+    await guardNavigation({
+      frameId: 0,
+      url: "https://news.ads.example.com/path",
+      tabId: 8,
+    });
+    assert.equal(mock.tabUpdates.length, 1);
+  });
 });
 
 test("guardNavigation closes the tab when blockAction is close", async () => {
-  const originalChrome = globalThis.chrome;
   const mock = makeChrome({
-    matchedRules: [{ ruleId: 1000000, rulesetId: "_dynamic" }],
-    dynamicRules: [{ id: 1000000, action: { type: "redirect" } }],
+    listBlock: ["example.com"],
     rulesBuiltAt: 21,
     blockAction: "close",
   });
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await guardNavigation({
-      frameId: 0,
-      url: "https://example.com/",
-      tabId: 5,
-    });
+  await withChrome(mock, async () => {
+    await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 5 });
     assert.deepEqual(mock.tabRemovals, [5]);
     assert.equal(mock.tabUpdates.length, 0, "does not also redirect");
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  });
 });
 
-test("guardNavigation ignores an allow-exception match", async () => {
-  const originalChrome = globalThis.chrome;
+test("guardNavigation honors a list allow exception", async () => {
   const mock = makeChrome({
-    matchedRules: [{ ruleId: 1, rulesetId: "_dynamic" }],
-    dynamicRules: [
-      { id: 1, action: { type: "allow" } },
-      { id: 2, action: { type: "redirect" } },
-    ],
+    listBlock: ["example.com"],
+    listAllow: ["safe.example.com"],
     rulesBuiltAt: 12,
   });
-  globalThis.chrome = mock.chrome;
-
-  try {
+  await withChrome(mock, async () => {
     await guardNavigation({
       frameId: 0,
-      url: "https://safe.example/",
+      url: "https://safe.example.com/",
       tabId: 7,
     });
     assert.equal(mock.tabUpdates.length, 0);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  });
 });
 
-test("guardNavigation does nothing when no rule matches", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChrome({ matchedRules: [], rulesBuiltAt: 13 });
-  globalThis.chrome = mock.chrome;
+test("guardNavigation lets a custom block override a list allow", async () => {
+  const mock = makeChrome({
+    listAllow: ["example.com"],
+    customBlock: ["example.com"],
+    rulesBuiltAt: 15,
+  });
+  await withChrome(mock, async () => {
+    await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 2 });
+    assert.equal(mock.tabUpdates.length, 1, "custom block wins over list allow");
+  });
+});
 
-  try {
+test("guardNavigation lets a custom allow override a list block", async () => {
+  const mock = makeChrome({
+    listBlock: ["example.com"],
+    customAllow: ["example.com"],
+    rulesBuiltAt: 16,
+  });
+  await withChrome(mock, async () => {
+    await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 2 });
+    assert.equal(mock.tabUpdates.length, 0, "custom allow wins over list block");
+  });
+});
+
+test("guardNavigation does nothing when no host matches", async () => {
+  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 13 });
+  await withChrome(mock, async () => {
     await guardNavigation({
       frameId: 0,
       url: "https://allowed.example/",
       tabId: 9,
     });
     assert.equal(mock.tabUpdates.length, 0);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  });
 });
 
 test("guardNavigation skips subframes and non-http schemes", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChrome({
-    matchedRules: [{ ruleId: 1000000, rulesetId: "_dynamic" }],
-    dynamicRules: [{ id: 1000000, action: { type: "redirect" } }],
-  });
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await guardNavigation({
-      frameId: 1,
-      url: "https://example.com/",
-      tabId: 1,
-    });
+  const mock = makeChrome({ listBlock: ["example.com"] });
+  await withChrome(mock, async () => {
+    await guardNavigation({ frameId: 1, url: "https://example.com/", tabId: 1 });
     await guardNavigation({
       frameId: 0,
       url: "chrome-extension://testid/src/blocked/blocked.html",
       tabId: 1,
     });
     assert.equal(mock.tabUpdates.length, 0);
-    assert.equal(
-      mock.testMatchCalls.length,
-      0,
-      "filtered navigations never query the rules",
-    );
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  });
 });
 
-test("guardNavigation leaves DNR to handle it when testMatchOutcome is unavailable", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChrome();
-  mock.chrome.declarativeNetRequest.testMatchOutcome = async () => {
-    throw new Error("not supported");
-  };
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await guardNavigation({
-      frameId: 0,
-      url: "https://example.com/",
-      tabId: 3,
-    });
-    assert.equal(mock.tabUpdates.length, 0);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+test("buildMatcher applies allow-over-block precedence across bands", () => {
+  const matcher = buildMatcher({
+    list: { block: ["a.com", "b.com"], allow: ["ok.a.com"] },
+    custom: { block: ["c.com"], allow: ["b.com"] },
+  });
+  assert.equal(matcher.isBlocked("a.com"), true);
+  assert.equal(matcher.isBlocked("deep.a.com"), true);
+  assert.equal(matcher.isBlocked("ok.a.com"), false, "list allow beats block");
+  assert.equal(matcher.isBlocked("b.com"), false, "custom allow beats list block");
+  assert.equal(matcher.isBlocked("c.com"), true, "custom block");
+  assert.equal(matcher.isBlocked("other.com"), false);
 });
 
 test("registerNavigationGuard registers the listener in every browser", () => {
