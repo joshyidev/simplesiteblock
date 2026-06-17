@@ -164,26 +164,11 @@ export async function getGuardHosts() {
   };
 }
 
-export async function getGuardHostsPresence() {
-  const stored = await ext.storage.local.get({
-    guardHostsList: null,
-    guardHostsCustom: null,
-  });
-  return {
-    list: isGuardHostsShape(stored.guardHostsList),
-    custom: isGuardHostsShape(stored.guardHostsCustom),
-  };
-}
-
 function coerceGuardHosts(value) {
   return {
     block: Array.isArray(value?.block) ? value.block : [],
     allow: Array.isArray(value?.allow) ? value.allow : [],
   };
-}
-
-function isGuardHostsShape(value) {
-  return Array.isArray(value?.block) && Array.isArray(value?.allow);
 }
 
 export async function getStorageBytesInUse() {

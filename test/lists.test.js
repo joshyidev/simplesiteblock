@@ -852,123 +852,6 @@ test("reconcileRules leaves a healthy applied state untouched", async () => {
   }
 });
 
-test("reconcileRules backfills list guard hosts from existing rules", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/l.txt",
-        format: "auto",
-        enabled: true,
-      },
-    ],
-    rawLists: { abc: "0.0.0.0 ads.example.com" },
-    dynamicRules: [
-      {
-        id: 1,
-        action: { type: "allow" },
-        condition: { requestDomains: ["safe.example.com"] },
-      },
-      {
-        id: 2,
-        action: { type: "redirect" },
-        condition: { requestDomains: ["ads.example.com"] },
-      },
-    ],
-  });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
-  mock.store.appliedListDomainCount = 1;
-  mock.store.appliedListRuleCount = 2;
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await reconcileRules();
-    assert.equal(mock.dnrUpdates.length, 0, "rules should not be rebuilt");
-    assert.deepEqual(mock.store.guardHostsList, {
-      block: ["ads.example.com"],
-      allow: ["safe.example.com"],
-    });
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("reconcileRules backfills list guard hosts without applying pending edits", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/l.txt",
-        format: "auto",
-        enabled: false,
-      },
-    ],
-    rawLists: { abc: "0.0.0.0 newer.example.com" },
-    dynamicRules: [
-      {
-        id: 2,
-        action: { type: "redirect" },
-        condition: { requestDomains: ["still-applied.example.com"] },
-      },
-    ],
-  });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
-  mock.store.appliedListDomainCount = 1;
-  mock.store.appliedListRuleCount = 1;
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await reconcileRules();
-    assert.equal(
-      mock.dnrUpdates.length,
-      0,
-      "a pending edit must not be applied during guard-host backfill",
-    );
-    assert.deepEqual(mock.store.guardHostsList, {
-      block: ["still-applied.example.com"],
-      allow: [],
-    });
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("reconcileRules backfills custom guard hosts from existing rules", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChromeMock({
-    customRules: "custom-block.example\n@@custom-allow.example",
-    dynamicRules: [
-      {
-        id: 1000000,
-        action: { type: "allow" },
-        condition: { requestDomains: ["custom-allow.example"] },
-      },
-      {
-        id: 1000001,
-        action: { type: "redirect" },
-        condition: { requestDomains: ["custom-block.example"] },
-      },
-    ],
-  });
-  mock.store.appliedCustomRuleCount = 2;
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await reconcileRules();
-    assert.equal(mock.dnrUpdates.length, 0, "rules should not be rebuilt");
-    assert.deepEqual(mock.store.guardHostsCustom, {
-      block: ["custom-block.example"],
-      allow: ["custom-allow.example"],
-    });
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
 test("reconcileRules does not disturb a pending list edit", async () => {
   const originalChrome = globalThis.chrome;
   // A disabled list whose rules were applied while it was enabled: this is the
@@ -996,11 +879,6 @@ test("reconcileRules does not disturb a pending list edit", async () => {
       0,
       "a pending edit must wait for Update All, not be reapplied on startup",
     );
-    assert.equal(
-      "appliedListRuleCount" in mock.store,
-      false,
-      "pending list edits should not get a rule-count backfill",
-    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -1022,7 +900,7 @@ test("reconcileRules restores list rules that vanished though some were applied"
     dynamicRules: [],
   });
   mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
-  mock.store.appliedListDomainCount = 1;
+  mock.store.appliedListRuleCount = 1;
   globalThis.chrome = mock.chrome;
 
   try {
@@ -1054,54 +932,6 @@ test("reconcileRules restores an allow-only custom slice that vanished", async (
     const customRules = mock.getRules().filter((r) => r.id >= 1000000);
     assert.equal(customRules.length, 1, "the custom slice is repopulated");
     assert.equal(customRules[0].action.type, "allow");
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("reconcileRules backfills custom rule count for upgraded allow-only slices", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChromeMock({
-    customRules: "@@allowed.example.com",
-    dynamicRules: [{ id: 1000000, action: { type: "allow" } }],
-  });
-  mock.store.appliedCustomDomainCount = 0;
-  mock.store.appliedCustomRuleCount = 0;
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await reconcileRules();
-    assert.equal(mock.dnrUpdates.length, 0, "existing rules stay applied");
-    assert.equal(mock.store.appliedCustomRuleCount, 1);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("reconcileRules backfills list rule count for upgraded allow-only slices", async () => {
-  const originalChrome = globalThis.chrome;
-  const mock = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/l.txt",
-        format: "auto",
-        enabled: true,
-      },
-    ],
-    rawLists: { abc: "@@allowed.example.com" },
-    dynamicRules: [{ id: 1, action: { type: "allow" } }],
-  });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
-  mock.store.appliedListDomainCount = 0;
-  mock.store.appliedListRuleCount = 0;
-  globalThis.chrome = mock.chrome;
-
-  try {
-    await reconcileRules();
-    assert.equal(mock.dnrUpdates.length, 0, "existing rules stay applied");
-    assert.equal(mock.store.appliedListRuleCount, 1);
   } finally {
     globalThis.chrome = originalChrome;
   }
