@@ -57,8 +57,12 @@ reload reuses the path-derived ID; a reset wipes storage but leaves the rule
 store). `reconcileRules()` clears **orphaned** rules — list rules present when
 `appliedSignature` is empty (rebuildListRules never ran in this storage), or
 custom rules with no backing text — and restores rules that vanished though some
-were last applied (`appliedListDomainCount`/`appliedCustomDomainCount` > 0 but the
-slice is empty). It deliberately does **not** reapply a pending edit: a non-empty
+were last applied (`appliedListRuleCount`/`appliedCustomRuleCount` > 0, with the
+`appliedListDomainCount`/`appliedCustomDomainCount` fallback for installs upgraded
+from before rule counts were tracked, but the slice is empty). The rule count, not
+the block-domain count, is the restore signal so an allow-only slice — which
+applies DNR rules but blocks 0 domains — is still restored. It deliberately does
+**not** reapply a pending edit: a non-empty
 `appliedSignature` that merely diverges from current config is the documented CRUD
 gap above, left for the next Update All, not orphan drift. It runs on
 `runtime.onInstalled` and `runtime.onStartup` only — **not** on every worker wake

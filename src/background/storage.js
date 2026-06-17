@@ -40,6 +40,8 @@ export async function getState({ includeRawLists = false } = {}) {
     appliedSignature: "",
     appliedListDomainCount: 0,
     appliedCustomDomainCount: 0,
+    appliedListRuleCount: 0,
+    appliedCustomRuleCount: 0,
   };
   // Cached raw list bodies are stored per-list; callers should use getRawList()
   // instead of loading every body at once.
@@ -64,6 +66,8 @@ export async function getState({ includeRawLists = false } = {}) {
         : "",
     appliedListDomainCount: Number(stored.appliedListDomainCount) || 0,
     appliedCustomDomainCount: Number(stored.appliedCustomDomainCount) || 0,
+    appliedListRuleCount: Number(stored.appliedListRuleCount) || 0,
+    appliedCustomRuleCount: Number(stored.appliedCustomRuleCount) || 0,
   };
 }
 
@@ -129,6 +133,14 @@ export async function saveListDomainCount(count) {
 
 export async function saveCustomDomainCount(count) {
   await ext.storage.local.set({ appliedCustomDomainCount: count });
+}
+
+export async function saveListRuleCount(count) {
+  await ext.storage.local.set({ appliedListRuleCount: count });
+}
+
+export async function saveCustomRuleCount(count) {
+  await ext.storage.local.set({ appliedCustomRuleCount: count });
 }
 
 function guardHostsKey(slice) {

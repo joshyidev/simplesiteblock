@@ -10,9 +10,11 @@ import {
   removeRawList,
   saveAppliedSignature,
   saveCustomDomainCount,
+  saveCustomRuleCount,
   saveCustomRules,
   saveGuardHosts,
   saveListDomainCount,
+  saveListRuleCount,
   saveLists,
   savePendingRebuild,
   saveRawList,
@@ -205,6 +207,7 @@ export async function rebuildListRules() {
   );
   await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
   await saveListDomainCount(blockHosts.size);
+  await saveListRuleCount(rules.length);
   // Persist the host sets for the navigation guard before bumping rulesBuiltAt,
   // which is how the guard knows to reload them.
   await saveGuardHosts("list", { block: blockHosts, allow: allowHosts });
@@ -229,6 +232,7 @@ export async function rebuildCustomRules() {
   const rules = packRules(blockHosts, allowHosts, CUSTOM_PRIORITIES);
   await applyRuleSlice(CUSTOM_RULE_ID_BASE, Number.MAX_SAFE_INTEGER, rules);
   await saveCustomDomainCount(blockHosts.size);
+  await saveCustomRuleCount(rules.length);
   await saveGuardHosts("custom", { block: blockHosts, allow: allowHosts });
   await saveRulesBuiltAt(Date.now());
 }
@@ -254,23 +258,45 @@ export async function reconcileRules() {
   if (!ext.declarativeNetRequest) return;
   const state = await getState({ includeRawLists: false });
   const existing = await ext.declarativeNetRequest.getDynamicRules();
-  const hasListRules = existing.some(
+  const presentListRules = existing.filter(
     (rule) => rule.id >= LIST_RULE_ID_BASE && rule.id < CUSTOM_RULE_ID_BASE,
   );
-  const hasCustomRules = existing.some(
+  const presentCustomRules = existing.filter(
     (rule) => rule.id >= CUSTOM_RULE_ID_BASE,
   );
+  const hasListRules = presentListRules.length > 0;
+  const hasCustomRules = presentCustomRules.length > 0;
 
   const customOrphaned = state.customRules.trim() === "" && hasCustomRules;
-  const customMissing = state.appliedCustomDomainCount > 0 && !hasCustomRules;
+  const customApplied =
+    state.appliedCustomRuleCount > 0 || state.appliedCustomDomainCount > 0;
+  const customMissing = customApplied && !hasCustomRules;
   if (customOrphaned || customMissing) {
     await rebuildCustomRules();
+  } else if (hasCustomRules && state.appliedCustomRuleCount === 0) {
+    // No config-match guard needed here: the custom slice applies immediately
+    // and has no CRUD-gap divergence — reaching this branch means the stored
+    // text and the applied rules agree, so backfill the count for upgraded
+    // installs that predate appliedCustomRuleCount.
+    await saveCustomRuleCount(presentCustomRules.length);
   }
 
   const orphanedListRules = state.appliedSignature === "" && hasListRules;
-  const listRulesMissing = state.appliedListDomainCount > 0 && !hasListRules;
+  const listConfigMatchesApplied =
+    rebuildSignature(state) === state.appliedSignature;
+  const listApplied =
+    state.appliedListRuleCount > 0 || state.appliedListDomainCount > 0;
+  const listRulesMissing = listApplied && !hasListRules;
   if (orphanedListRules || listRulesMissing) {
     await rebuildListRules();
+  } else if (
+    hasListRules &&
+    listConfigMatchesApplied &&
+    state.appliedListRuleCount === 0
+  ) {
+    // Backfill only when the applied config still matches, so a CRUD-gap
+    // divergence (a disabled-but-still-applied list) is left for Update All.
+    await saveListRuleCount(presentListRules.length);
   }
 }
 

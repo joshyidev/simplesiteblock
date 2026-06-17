@@ -879,6 +879,11 @@ test("reconcileRules does not disturb a pending list edit", async () => {
       0,
       "a pending edit must wait for Update All, not be reapplied on startup",
     );
+    assert.equal(
+      "appliedListRuleCount" in mock.store,
+      false,
+      "pending list edits should not get a rule-count backfill",
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -910,6 +915,76 @@ test("reconcileRules restores list rules that vanished though some were applied"
       .filter((r) => r.id >= 1 && r.id < 1000000);
     assert.equal(listRules.length, 1, "the list slice is repopulated");
     assert.equal(listRules[0].action.type, "redirect");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules restores an allow-only custom slice that vanished", async () => {
+  const originalChrome = globalThis.chrome;
+  // An allow-only ruleset applies a DNR allow rule but blocks 0 domains, so the
+  // block-domain count is 0; reconcile must still restore it from the rule count.
+  const mock = makeChromeMock({
+    customRules: "@@allowed.example.com",
+    dynamicRules: [],
+  });
+  mock.store.appliedCustomDomainCount = 0;
+  mock.store.appliedCustomRuleCount = 1;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    const customRules = mock.getRules().filter((r) => r.id >= 1000000);
+    assert.equal(customRules.length, 1, "the custom slice is repopulated");
+    assert.equal(customRules[0].action.type, "allow");
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules backfills custom rule count for upgraded allow-only slices", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({
+    customRules: "@@allowed.example.com",
+    dynamicRules: [{ id: 1000000, action: { type: "allow" } }],
+  });
+  mock.store.appliedCustomDomainCount = 0;
+  mock.store.appliedCustomRuleCount = 0;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.equal(mock.dnrUpdates.length, 0, "existing rules stay applied");
+    assert.equal(mock.store.appliedCustomRuleCount, 1);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules backfills list rule count for upgraded allow-only slices", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/l.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    rawLists: { abc: "@@allowed.example.com" },
+    dynamicRules: [{ id: 1, action: { type: "allow" } }],
+  });
+  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
+  mock.store.appliedListDomainCount = 0;
+  mock.store.appliedListRuleCount = 0;
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.equal(mock.dnrUpdates.length, 0, "existing rules stay applied");
+    assert.equal(mock.store.appliedListRuleCount, 1);
   } finally {
     globalThis.chrome = originalChrome;
   }
