@@ -5,6 +5,7 @@ import { normalizeHosts } from "./normalize.js";
 import { packRules } from "./packer.js";
 import { applyRuleSlice } from "./rules.js";
 import {
+  getGuardHostsPresence,
   getRawList,
   getState,
   removeRawList,
@@ -266,6 +267,7 @@ export async function reconcileRules() {
   );
   const hasListRules = presentListRules.length > 0;
   const hasCustomRules = presentCustomRules.length > 0;
+  const guardHostsPresent = await getGuardHostsPresence();
 
   const customOrphaned = state.customRules.trim() === "" && hasCustomRules;
   const customApplied =
@@ -273,12 +275,17 @@ export async function reconcileRules() {
   const customMissing = customApplied && !hasCustomRules;
   if (customOrphaned || customMissing) {
     await rebuildCustomRules();
-  } else if (hasCustomRules && state.appliedCustomRuleCount === 0) {
-    // No config-match guard needed here: the custom slice applies immediately
-    // and has no CRUD-gap divergence — reaching this branch means the stored
-    // text and the applied rules agree, so backfill the count for upgraded
-    // installs that predate appliedCustomRuleCount.
-    await saveCustomRuleCount(presentCustomRules.length);
+  } else {
+    if (hasCustomRules && !guardHostsPresent.custom) {
+      await saveGuardHosts("custom", guardHostsFromRules(presentCustomRules));
+    }
+    if (hasCustomRules && state.appliedCustomRuleCount === 0) {
+      // No config-match guard needed here: the custom slice applies immediately
+      // and has no CRUD-gap divergence — reaching this branch means the stored
+      // text and the applied rules agree, so backfill the count for upgraded
+      // installs that predate appliedCustomRuleCount.
+      await saveCustomRuleCount(presentCustomRules.length);
+    }
   }
 
   const orphanedListRules = state.appliedSignature === "" && hasListRules;
@@ -289,15 +296,32 @@ export async function reconcileRules() {
   const listRulesMissing = listApplied && !hasListRules;
   if (orphanedListRules || listRulesMissing) {
     await rebuildListRules();
-  } else if (
-    hasListRules &&
-    listConfigMatchesApplied &&
-    state.appliedListRuleCount === 0
-  ) {
-    // Backfill only when the applied config still matches, so a CRUD-gap
-    // divergence (a disabled-but-still-applied list) is left for Update All.
-    await saveListRuleCount(presentListRules.length);
+  } else {
+    if (hasListRules && !guardHostsPresent.list) {
+      await saveGuardHosts("list", guardHostsFromRules(presentListRules));
+    }
+    if (
+      hasListRules &&
+      listConfigMatchesApplied &&
+      state.appliedListRuleCount === 0
+    ) {
+      // Backfill only when the applied config still matches, so a CRUD-gap
+      // divergence (a disabled-but-still-applied list) is left for Update All.
+      await saveListRuleCount(presentListRules.length);
+    }
   }
+}
+
+function guardHostsFromRules(rules) {
+  const block = new Set();
+  const allow = new Set();
+  for (const rule of rules) {
+    const target = rule.action?.type === "allow" ? allow : block;
+    for (const host of rule.condition?.requestDomains || []) {
+      if (typeof host === "string") target.add(host);
+    }
+  }
+  return { block, allow };
 }
 
 // Set pendingRebuild to reflect whether a rebuild would actually change the
