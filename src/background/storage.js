@@ -5,6 +5,7 @@ const RAW_LIST_PREFIX = "rawList:";
 export const DEFAULT_SETTINGS = Object.freeze({
   passwordEnabled: false,
   password: "",
+  unlockDelaySeconds: 0,
   lastUnlockAt: 0,
   updateIntervalDays: 7,
   blockAction: "redirect",

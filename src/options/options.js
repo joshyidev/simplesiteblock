@@ -86,6 +86,7 @@ function renderApp(state) {
 }
 
 function renderTabs(settings) {
+  const gated = settings.passwordEnabled || settings.unlockDelaySeconds > 0;
   return `
     <div class="tab-bar">
       <nav class="tabs" role="tablist" aria-label="Options pages">
@@ -105,7 +106,7 @@ function renderTabs(settings) {
           `;
         }).join("")}
       </nav>
-      ${settings.passwordEnabled ? `<button id="lockButton" class="ghost tab-lock" type="button">Lock</button>` : ""}
+      ${gated ? `<button id="lockButton" class="ghost tab-lock" type="button">Lock</button>` : ""}
     </div>
   `;
 }
@@ -205,20 +206,29 @@ function renderSettingsTab(state) {
         <div class="setting-heading">
           <div class="setting-copy">
             <h3>Password</h3>
-            <p class="page-desc muted">Locks access to these options. The extension continues blocking while locked.</p>
-          </div>
-          <div class="setting-actions">
-            ${
-              state.settings.passwordEnabled
-                ? `
-              <form id="disablePasswordForm"><button class="danger fit" type="submit">Disable</button></form>
-            `
-                : ""
-            }
+            <p class="page-desc muted">Set a password to lock access to these options. Set a blank password to disable it.</p>
           </div>
         </div>
         ${renderPassword(state.settings)}
-        <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+      </div>
+
+      <div class="setting-block">
+        <div class="setting-heading">
+          <div class="setting-copy">
+            <h3>Countdown Timer</h3>
+            <p class="page-desc muted">Set a countdown timer before the options unlock.</p>
+          </div>
+        </div>
+        <form id="unlockDelayForm" class="setting-row">
+          <label class="field-inline">
+            Timer duration:
+            <select class="delay-select" name="unlockDelaySeconds">
+              ${renderDelayOptions(state.settings.unlockDelaySeconds)}
+            </select>
+          </label>
+          <button class="fit" type="submit">Save</button>
+          <p class="delay-status muted" id="delayStatus" role="status" aria-live="polite"></p>
+        </form>
       </div>
 
       <div class="setting-block setting-block-stack">
@@ -336,7 +346,7 @@ function animatePendingNoticeOut(shouldAnimate) {
 function renderPassword(settings) {
   if (!settings.passwordEnabled) {
     return `
-      <form id="enablePasswordForm" class="row">
+      <form id="enablePasswordForm" class="password-form">
         <label class="field">
           New password
           <input name="password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
@@ -345,24 +355,55 @@ function renderPassword(settings) {
           Confirm
           <input name="confirm" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
         </label>
-        <button class="fit password-submit" type="submit">Enable</button>
+        <div class="password-actions">
+          <button class="fit password-submit" type="submit">Enable</button>
+          <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+        </div>
       </form>
     `;
   }
 
   return `
-    <form id="changePasswordForm" class="row">
+    <form id="changePasswordForm" class="password-form">
       <label class="field">
         New password
-        <input name="password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
+        <input name="password" type="password" autocomplete="new-password">
       </label>
       <label class="field">
         Confirm
-        <input name="confirm" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required>
+        <input name="confirm" type="password" autocomplete="new-password">
       </label>
-      <button class="fit password-submit" type="submit">Change</button>
+      <div class="password-actions">
+        <button class="fit password-submit" type="submit">Change</button>
+        <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+      </div>
     </form>
   `;
+}
+
+const DELAY_PRESETS = [
+  [0, "Off"],
+  [15, "15 seconds"],
+  [30, "30 seconds"],
+  [60, "1 minute"],
+  [300, "5 minutes"],
+  [600, "10 minutes"],
+  [900, "15 minutes"],
+  [1800, "30 minutes"],
+];
+
+function renderDelayOptions(current) {
+  const selected = Number(current) || 0;
+  const presets = DELAY_PRESETS.slice();
+  if (!presets.some(([value]) => value === selected)) {
+    presets.push([selected, `${selected} seconds`]);
+  }
+  return presets
+    .map(
+      ([value, label]) =>
+        `<option value="${value}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`,
+    )
+    .join("");
 }
 
 function renderLists(lists) {
@@ -658,13 +699,25 @@ function bindEvents(state) {
     changeForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const password = form.get("password");
-      if (!isPasswordLongEnough(password)) {
-        setPasswordStatus("Password must be at least 8 characters.");
+      const password = String(form.get("password") || "");
+      const confirm = String(form.get("confirm") || "");
+      if (password === "" && confirm === "") {
+        await saveSettings({ passwordEnabled: false, password: "" });
+        if (state.settings.unlockDelaySeconds > 0) {
+          sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
+        } else {
+          lockOptions();
+        }
+        await boot();
+        setPasswordStatus("Password disabled.");
         return;
       }
-      if (password !== form.get("confirm")) {
+      if (password !== confirm) {
         setPasswordStatus("Passwords do not match.");
+        return;
+      }
+      if (!isPasswordLongEnough(password)) {
+        setPasswordStatus("Password must be at least 8 characters.");
         return;
       }
       await saveSettings({
@@ -675,14 +728,21 @@ function bindEvents(state) {
     });
   }
 
-  const disableForm = app.querySelector("#disablePasswordForm");
-  if (disableForm) {
-    disableForm.addEventListener("submit", async (event) => {
+  const unlockDelayForm = app.querySelector("#unlockDelayForm");
+  if (unlockDelayForm) {
+    unlockDelayForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      await saveSettings({ passwordEnabled: false, password: "" });
-      lockOptions();
+      const form = new FormData(event.currentTarget);
+      const seconds = Number(form.get("unlockDelaySeconds"));
+      if (!Number.isInteger(seconds) || seconds < 0) {
+        setDelayStatus("Choose a valid delay.");
+        return;
+      }
+      await saveSettings({ unlockDelaySeconds: seconds });
+      // Stay unlocked for the current session; the delay applies next session.
+      sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       await boot();
-      setPasswordStatus("Password disabled.");
+      setDelayStatus(seconds > 0 ? "Unlock delay saved." : "Unlock delay off.");
     });
   }
 
@@ -731,7 +791,10 @@ function bindEvents(state) {
         text: await file.text(),
       });
       const nextState = await getState({ includeRawLists: false });
-      if (nextState.settings.passwordEnabled) {
+      const gated =
+        nextState.settings.passwordEnabled ||
+        nextState.settings.unlockDelaySeconds > 0;
+      if (gated) {
         sessionStorage.setItem("simpleSiteBlockUnlocked", "true");
       } else {
         lockOptions();
@@ -830,6 +893,13 @@ function setPasswordStatus(message) {
   const passwordStatus = app.querySelector("#passwordStatus");
   if (passwordStatus) {
     passwordStatus.textContent = message;
+  }
+}
+
+function setDelayStatus(message) {
+  const delayStatus = app.querySelector("#delayStatus");
+  if (delayStatus) {
+    delayStatus.textContent = message;
   }
 }
 

@@ -101,6 +101,27 @@ test("settings import accepts plaintext password settings", () => {
   assert.equal(imported.settings.password, "accountability");
 });
 
+test("settings export and import round-trip the unlock delay", () => {
+  const state = makeState();
+  state.settings.unlockDelaySeconds = 300;
+  const payload = JSON.parse(createSettingsExport(state));
+  assert.equal(payload.settings.unlockDelaySeconds, 300);
+
+  const imported = parseSettingsImport(JSON.stringify(payload));
+  assert.equal(imported.settings.unlockDelaySeconds, 300);
+});
+
+test("settings import falls back to default for an invalid unlock delay", () => {
+  const imported = parseSettingsImport(
+    JSON.stringify(
+      makePayload({
+        settings: { updateIntervalDays: 7, unlockDelaySeconds: -5 },
+      }),
+    ),
+  );
+  assert.equal(imported.settings.unlockDelaySeconds, 0);
+});
+
 test("settings import rejects compiled indexes", () => {
   assert.throws(
     () =>
@@ -112,9 +133,10 @@ test("settings import rejects compiled indexes", () => {
 });
 
 test("settings import rejects more than 1000 custom domains", () => {
-  const customRules = Array.from({ length: 1001 }, (_, i) => `d${i}.example`).join(
-    "\n",
-  );
+  const customRules = Array.from(
+    { length: 1001 },
+    (_, i) => `d${i}.example`,
+  ).join("\n");
   assert.throws(
     () => parseSettingsImport(JSON.stringify(makePayload({ customRules }))),
     /limited to 1000 domains/,

@@ -91,6 +91,9 @@ function exportSettings(settings) {
     blockAction: validBlockAction(settings.blockAction)
       ? settings.blockAction
       : DEFAULT_SETTINGS.blockAction,
+    unlockDelaySeconds: validUnlockDelay(settings.unlockDelaySeconds)
+      ? settings.unlockDelaySeconds
+      : DEFAULT_SETTINGS.unlockDelaySeconds,
   };
 }
 
@@ -113,6 +116,9 @@ function importSettings(settings, password) {
     blockAction: validBlockAction(settings.blockAction)
       ? settings.blockAction
       : DEFAULT_SETTINGS.blockAction,
+    unlockDelaySeconds: validUnlockDelay(settings.unlockDelaySeconds)
+      ? settings.unlockDelaySeconds
+      : DEFAULT_SETTINGS.unlockDelaySeconds,
     ...passwordSettings,
     lastUnlockAt: 0,
   };
@@ -189,4 +195,8 @@ function validUpdateInterval(value) {
 
 function validBlockAction(value) {
   return value === "redirect" || value === "close";
+}
+
+function validUnlockDelay(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 86400;
 }
