@@ -30,9 +30,13 @@ void boot();
 
 window.addEventListener("hashchange", () => {
   const nextTab = readActiveTab();
-  if (nextTab !== activeTab && !app.hidden) {
-    setActiveTab(nextTab, { updateLocation: false });
+  if (nextTab === activeTab) return;
+  if (app.hidden) {
+    // App is locked/not rendered; remember the target so it applies on unlock.
+    activeTab = nextTab;
+    return;
   }
+  setActiveTab(nextTab, { updateLocation: false });
 });
 
 async function boot() {
@@ -152,7 +156,7 @@ function renderListsTab(state, { animatePendingIn, animatePendingOut }) {
 function renderRulesTab(state) {
   return `
     <div class="page rules-page">
-      <form id="customRulesForm" class="custom-rules-form editor-form">
+      <form id="customRulesForm" class="custom-rules-form">
         <p class="page-desc muted custom-rules-desc">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
         <label class="field">
           <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>

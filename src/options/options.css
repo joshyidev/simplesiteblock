@@ -10,9 +10,6 @@
   --danger: #b42318;
   --danger-bg: #fff1f0;
   --focus: #1d4ed8;
-  --button-bg: #e7e7e3;
-  --button-hover: #dcdcd7;
-  --button-border: #c9c9c1;
 }
 
 * {
@@ -35,10 +32,10 @@ select {
 
 button {
   min-height: 34px;
-  border: 1px solid var(--button-border);
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  background: var(--button-bg);
-  color: var(--text);
+  background: var(--accent);
+  color: white;
   padding: 6px 12px;
   cursor: pointer;
 }
@@ -53,7 +50,7 @@ a:focus-visible {
 }
 
 button:hover {
-  background: var(--button-hover);
+  background: var(--accent-strong);
 }
 
 button:disabled {
@@ -62,7 +59,7 @@ button:disabled {
 }
 
 button:disabled:hover {
-  background: var(--button-bg);
+  background: var(--accent);
 }
 
 button.ghost {
@@ -78,7 +75,6 @@ button.ghost:hover {
 button.danger {
   border-color: var(--danger);
   background: var(--danger);
-  color: white;
 }
 
 button.ghost.danger {
@@ -463,9 +459,22 @@ h3 {
   display: none;
 }
 
+.shell.is-locked {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 0;
+}
+
 .lock-panel {
   width: min(480px, 100%);
-  margin: min(18vh, 140px) auto 0;
+  margin: 0 auto;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 table {
@@ -647,16 +656,16 @@ td:nth-child(6) {
   display: inline-flex;
   align-items: center;
   min-height: 34px;
-  border: 1px solid var(--button-border);
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  background: var(--button-bg);
-  color: var(--text);
+  background: var(--accent);
+  color: white;
   padding: 6px 12px;
   text-decoration: none;
 }
 
 .button-link:hover {
-  background: var(--button-hover);
+  background: var(--accent-strong);
 }
 
 .about-links {
@@ -855,8 +864,5 @@ td:nth-child(6) {
     --danger: #f97066;
     --danger-bg: #351716;
     --focus: #93c5fd;
-    --button-bg: #303435;
-    --button-hover: #3a3f40;
-    --button-border: #4a504e;
   }
 }

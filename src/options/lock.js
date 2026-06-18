@@ -12,6 +12,7 @@ export function lockOptions() {
 export function renderLock(container, { settings, onUnlocked }) {
   container.hidden = false;
   container.innerHTML = `
+    <p class="eyebrow">SimpleSiteBlock</p>
     <div class="section-header lock-header">
       <h2>Options locked</h2>
       <div class="section-header-actions">
