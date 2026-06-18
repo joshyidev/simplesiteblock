@@ -14,10 +14,26 @@ const lock = document.querySelector("#lock");
 const shell = document.querySelector(".shell");
 const manifest = ext.runtime.getManifest();
 const MIN_PASSWORD_LENGTH = 8;
+const DEFAULT_TAB = "lists";
+const OPTION_TABS = [
+  { id: "lists", label: "Lists" },
+  { id: "rules", label: "Custom rules" },
+  { id: "settings", label: "Settings" },
+  { id: "support", label: "Support" },
+  { id: "about", label: "About" },
+];
 let lastPendingRebuild = false;
 let editingListId = null;
+let activeTab = readActiveTab();
 
 void boot();
+
+window.addEventListener("hashchange", () => {
+  const nextTab = readActiveTab();
+  if (nextTab !== activeTab && !app.hidden) {
+    setActiveTab(nextTab, { updateLocation: false });
+  }
+});
 
 async function boot() {
   const state = await getState({ includeRawLists: false });
@@ -40,103 +56,216 @@ async function boot() {
 function renderApp(state) {
   const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
   const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
+  if (!isKnownTab(activeTab)) activeTab = DEFAULT_TAB;
 
   app.innerHTML = `
-    <div class="grid">
-      <section class="panel span">
-        <div class="section-header">
-          <h2>Lists</h2>
-          <p class="list-summary muted" id="listsMeta">${escapeHtml(statsText(state))}</p>
-        </div>
-        <div class="section-actions list-controls">
-          <label class="field-inline">
-            Auto-update
-            <select id="updateInterval" ${editingListId ? "disabled" : ""}>
-              <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
-              ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
-            </select>
-          </label>
-          <button id="updateAllButton" type="button" ${editingListId ? "disabled" : ""}>Update All</button>
+    ${renderTabs(state.settings)}
+    <div class="tab-panels">
+      ${renderTabPanel(
+        "lists",
+        renderListsTab(state, {
+          animatePendingIn,
+          animatePendingOut,
+        }),
+      )}
+      ${renderTabPanel("rules", renderRulesTab(state))}
+      ${renderTabPanel("settings", renderSettingsTab(state))}
+      ${renderTabPanel("support", renderSupportTab())}
+      ${renderTabPanel("about", renderAboutTab())}
+    </div>
+  `;
+
+  bindTabs();
+  bindEvents(state);
+  animatePendingNoticeOut(animatePendingOut);
+  lastPendingRebuild = state.pendingRebuild;
+}
+
+function renderTabs(settings) {
+  return `
+    <div class="tab-bar">
+      <nav class="tabs" role="tablist" aria-label="Options pages">
+        ${OPTION_TABS.map((tab) => {
+          const selected = tab.id === activeTab;
+          return `
+            <button
+              id="tab-${escapeHtml(tab.id)}"
+              class="tab-button"
+              type="button"
+              role="tab"
+              aria-controls="panel-${escapeHtml(tab.id)}"
+              aria-selected="${selected ? "true" : "false"}"
+              data-tab-id="${escapeHtml(tab.id)}"
+              tabindex="${selected ? "0" : "-1"}"
+            >${escapeHtml(tab.label)}</button>
+          `;
+        }).join("")}
+      </nav>
+      ${settings.passwordEnabled ? `<button id="lockButton" class="ghost tab-lock" type="button">Lock</button>` : ""}
+    </div>
+  `;
+}
+
+function renderTabPanel(tabId, content) {
+  return `
+    <section
+      id="panel-${escapeHtml(tabId)}"
+      class="tab-panel"
+      role="tabpanel"
+      aria-labelledby="tab-${escapeHtml(tabId)}"
+      data-tab-id="${escapeHtml(tabId)}"
+      ${tabId === activeTab ? "" : "hidden"}
+    >
+      ${content}
+    </section>
+  `;
+}
+
+function renderListsTab(state, { animatePendingIn, animatePendingOut }) {
+  return `
+    <div class="page lists-page">
+      <div class="page-header">
+        <div class="page-toolbar list-controls">
+          <button id="updateAllButton" type="button" ${editingListId ? "disabled" : ""}>Update lists</button>
           <p class="list-status muted" id="listsStatus" role="status" aria-live="polite"></p>
         </div>
-        ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
-        ${renderLists(state.lists)}
-        <form id="addListForm" class="row add-list-form">
-          <label class="field">
-            Name
-            <input name="name" placeholder="StevenBlack hosts" ${editingListId ? "disabled" : ""}>
-          </label>
-          <label class="field">
-            URL
-            <input name="url" type="url" placeholder="https://example.com/list.txt" required ${editingListId ? "disabled" : ""}>
-          </label>
-          <button id="addListButton" class="fit" type="submit" ${editingListId ? "disabled" : ""}>Add list</button>
-        </form>
-      </section>
-
-      <section class="panel span">
-        <h2>Custom rules</h2>
-        <p class="muted section-desc">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
-        <form id="customRulesForm" class="custom-rules-form">
-          <label class="field">
-            <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
-          </label>
-          <div class="form-actions custom-rules-actions">
-            <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
-            <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel">
-        <h2>Block page</h2>
-        <label class="field-inline block-action">
-          When a site is blocked
-          <select id="blockAction">
-            <option value="redirect" ${state.settings.blockAction !== "close" ? "selected" : ""}>Show block page</option>
-            <option value="close" ${state.settings.blockAction === "close" ? "selected" : ""}>Close the tab</option>
-          </select>
+        <p class="page-meta muted list-summary" id="listsMeta">${escapeHtml(statsText(state))}</p>
+      </div>
+      <div class="list-divider" aria-hidden="true"></div>
+      ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
+      ${renderLists(state.lists)}
+      <form id="addListForm" class="row add-list-form field-group">
+        <label class="field">
+          Name
+          <input name="name" placeholder="StevenBlack hosts" ${editingListId ? "disabled" : ""}>
         </label>
-        <p class="block-action-status muted" id="blockActionStatus" role="status" aria-live="polite"></p>
-      </section>
+        <label class="field">
+          URL
+          <input name="url" type="url" placeholder="https://example.com/list.txt" required ${editingListId ? "disabled" : ""}>
+        </label>
+        <button id="addListButton" class="fit" type="submit" ${editingListId ? "disabled" : ""}>Add list</button>
+      </form>
+    </div>
+  `;
+}
 
-      <section class="panel">
-        <div class="section-header password-header">
-          <h2>Password</h2>
-          <div class="section-header-actions">
-            <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+function renderRulesTab(state) {
+  return `
+    <div class="page rules-page">
+      <form id="customRulesForm" class="custom-rules-form editor-form">
+        <p class="page-desc muted custom-rules-desc">One domain per line (up to 1000) — each blocks that domain and all its subdomains. Prefix a line with @@ to allow it instead.</p>
+        <label class="field">
+          <textarea id="customRules" name="customRules" aria-label="Domains to block, one per line" spellcheck="false" rows="8" placeholder="example.com&#10;ads.example.net # optional comment&#10;@@allowed.example.org # allow instead of block">${escapeHtml(state.customRules)}</textarea>
+        </label>
+        <div class="page-toolbar custom-rules-actions">
+          <button id="saveCustomRulesButton" class="fit" type="submit">Save rules</button>
+          <p class="custom-rules-status muted" id="customRulesStatus" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderSettingsTab(state) {
+  return `
+    <div class="page settings-page">
+      <div class="setting-block setting-block-stack">
+        <div class="setting-copy">
+          <h3>General</h3>
+        </div>
+        <div class="setting-control general-settings">
+          <div class="setting-row">
+            <label class="field-inline">
+              Auto-update every
+              <select id="updateInterval" ${editingListId ? "disabled" : ""}>
+                <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
+                ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
+              </select>
+            </label>
+            <p class="auto-update-status muted" id="autoUpdateStatus" role="status" aria-live="polite"></p>
+          </div>
+          <div class="setting-row">
+            <label class="field-inline block-action">
+              When a site is blocked:
+              <select id="blockAction">
+                <option value="redirect" ${state.settings.blockAction !== "close" ? "selected" : ""}>Show block page</option>
+                <option value="close" ${state.settings.blockAction === "close" ? "selected" : ""}>Close the tab</option>
+              </select>
+            </label>
+            <p class="block-action-status muted" id="blockActionStatus" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-block">
+        <div class="setting-heading">
+          <div class="setting-copy">
+            <h3>Password</h3>
+            <p class="page-desc muted">Locks access to these options. The extension continues blocking while locked.</p>
+          </div>
+          <div class="setting-actions">
             ${
               state.settings.passwordEnabled
                 ? `
-              <button id="lockButton" class="ghost fit" type="button">Lock</button>
               <form id="disablePasswordForm"><button class="danger fit" type="submit">Disable</button></form>
             `
                 : ""
             }
           </div>
         </div>
-        <p class="muted section-desc">Locks access to these options. The extension continues blocking while locked.</p>
         ${renderPassword(state.settings)}
-      </section>
+        <p class="password-status muted" id="passwordStatus" role="status" aria-live="polite"></p>
+      </div>
 
-      <section class="panel">
-        <h2>Import / Export Settings</h2>
+      <div class="setting-block setting-block-stack">
+        <div class="setting-copy">
+          <h3>Import / Export Settings</h3>
+        </div>
         <div class="backup-actions">
           <label class="checkline">
             <input id="includePasswordExport" type="checkbox">
             Include password settings when exporting
           </label>
-          <div class="section-actions">
+          <div class="page-toolbar">
             <button id="exportSettingsButton" type="button">Export</button>
             <button id="importSettingsButton" type="button">Import</button>
             <input id="settingsImportFile" type="file" accept=".txt,.json,application/json,text/plain" hidden>
             <p class="backup-status muted" id="backupStatus" role="status" aria-live="polite"></p>
           </div>
         </div>
-      </section>
+      </div>
+    </div>
+  `;
+}
 
-      <section class="panel">
-        <h2>Diagnostics</h2>
+function renderSupportTab() {
+  return `
+    <div class="page support-page">
+      <div class="setting-block setting-block-stack">
+        <div class="setting-copy">
+          <h3>Documentation</h3>
+          <p class="page-desc muted">Learn supported rule formats, matching behavior, limits, and list troubleshooting.</p>
+        </div>
+        <nav class="button-link-list" aria-label="Documentation">
+          <a class="button-link" href="https://github.com/joshyidev/simplesiteblock/wiki" target="_blank" rel="noopener">Open documentation</a>
+        </nav>
+      </div>
+
+      <div class="setting-block setting-block-stack">
+        <div class="setting-copy">
+          <h3>Bug report</h3>
+          <p class="page-desc muted">Report issues to the SimpleSiteBlock issue tracker. Requires a GitHub account.</p>
+        </div>
+        <nav class="button-link-list" aria-label="Bug report">
+          <a class="button-link" href="https://github.com/joshyidev/simplesiteblock/issues" target="_blank" rel="noopener">Open issue tracker</a>
+        </nav>
+      </div>
+
+      <div class="setting-block setting-block-stack">
+        <div class="setting-copy">
+          <h3>Check domain</h3>
+          <p class="page-desc muted">See whether a domain is blocked, allowed, or not matched.</p>
+        </div>
         <div class="row">
           <label class="field">
             <input id="lookupInput" type="text" aria-label="Domain to check" placeholder="example.com or https://example.com">
@@ -144,20 +273,15 @@ function renderApp(state) {
           <button id="lookupButton" class="fit" type="button">Check</button>
         </div>
         <output id="lookupResult" class="verdict">No lookup run.</output>
-      </section>
+      </div>
+    </div>
+  `;
+}
 
-      <section class="panel">
-        <h2>Links</h2>
-        <nav class="link-list" aria-label="Help and project links">
-          <a href="https://github.com/joshyidev/simplesiteblock/wiki">Documentation</a>
-          <a href="https://github.com/joshyidev/simplesiteblock/releases">Changelog</a>
-          <a href="https://github.com/joshyidev/simplesiteblock/issues">Bug report (GitHub)</a>
-          <a href="https://github.com/joshyidev/simplesiteblock">Source code (MIT)</a>
-          <a href="https://github.com/joshyidev/simplesiteblock/wiki/Privacy-Policy">Privacy Policy</a>
-        </nav>
-      </section>
-
-      <section class="panel about-panel" aria-label="About ${escapeHtml(manifest.name)}">
+function renderAboutTab() {
+  return `
+    <div class="page about-page">
+      <div class="about-panel" aria-label="About ${escapeHtml(manifest.name)}">
         <div class="about-summary">
           <img class="about-icon" src="../../icons/icon128.png" alt="" width="64" height="64">
           <div>
@@ -166,13 +290,15 @@ function renderApp(state) {
             <p class="about-version">Joshua Yi</p>
           </div>
         </div>
-      </section>
+      </div>
+
+      <nav class="link-list about-links" aria-label="Links">
+        <a href="https://github.com/joshyidev/simplesiteblock" target="_blank" rel="noopener">Source code (MIT)</a>
+        <a href="https://github.com/joshyidev/simplesiteblock/releases" target="_blank" rel="noopener">Changelog</a>
+        <a href="https://github.com/joshyidev/simplesiteblock/wiki/Privacy-Policy" target="_blank" rel="noopener">Privacy Policy</a>
+      </nav>
     </div>
   `;
-
-  bindEvents(state);
-  animatePendingNoticeOut(animatePendingOut);
-  lastPendingRebuild = state.pendingRebuild;
 }
 
 // Reads the blocked-domain count recorded by the worker at rebuild time rather
@@ -184,13 +310,13 @@ function statsText(state) {
     : "Never";
   const domains =
     (state.appliedListDomainCount || 0) + (state.appliedCustomDomainCount || 0);
-  return `${domains.toLocaleString()} domains blocked · Built ${built}`;
+  return `${domains.toLocaleString()} domains blocked · Last built: ${built}`;
 }
 
 function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
   return `
     <p id="pendingNotice" class="pending-notice${isVisible ? " is-visible" : ""}${shouldAnimateIn ? " is-entering" : ""}" role="status" aria-live="polite" aria-hidden="${isActive ? "false" : "true"}">
-      Pending changes — run <strong>Update All</strong> to apply.
+      Pending changes — run <strong>Update lists</strong> to apply.
     </p>
   `;
 }
@@ -294,6 +420,71 @@ function renderListRow(list) {
   `;
 }
 
+function bindTabs() {
+  for (const button of app.querySelectorAll(".tab-button")) {
+    button.addEventListener("click", () => {
+      setActiveTab(button.dataset.tabId);
+    });
+  }
+
+  const tablist = app.querySelector(".tabs");
+  tablist.addEventListener("keydown", (event) => {
+    const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+
+    const buttons = Array.from(app.querySelectorAll(".tab-button"));
+    const currentIndex = buttons.indexOf(document.activeElement);
+    if (currentIndex === -1) return;
+
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+    } else if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % buttons.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = buttons.length - 1;
+    }
+
+    event.preventDefault();
+    buttons[nextIndex].focus();
+    setActiveTab(buttons[nextIndex].dataset.tabId);
+  });
+}
+
+function setActiveTab(tabId, { updateLocation = true } = {}) {
+  if (!isKnownTab(tabId)) return;
+  activeTab = tabId;
+
+  for (const button of app.querySelectorAll(".tab-button")) {
+    const selected = button.dataset.tabId === tabId;
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    button.tabIndex = selected ? 0 : -1;
+  }
+
+  for (const panel of app.querySelectorAll(".tab-panel")) {
+    panel.hidden = panel.dataset.tabId !== tabId;
+  }
+
+  if (updateLocation) {
+    const nextHash = `#${tabId}`;
+    if (window.location.hash !== nextHash) {
+      history.replaceState(null, "", nextHash);
+    }
+  }
+}
+
+function readActiveTab() {
+  const hashTab = window.location.hash.slice(1);
+  if (isKnownTab(hashTab)) return hashTab;
+  return DEFAULT_TAB;
+}
+
+function isKnownTab(tabId) {
+  return OPTION_TABS.some((tab) => tab.id === tabId);
+}
+
 function bindEvents(state) {
   app
     .querySelector("#addListForm")
@@ -342,21 +533,21 @@ function bindEvents(state) {
     .addEventListener("change", async (event) => {
       await saveSettings({ updateIntervalDays: Number(event.target.value) });
       await boot();
-      setListsStatus("Auto-update interval saved.");
+      setAutoUpdateStatus("Auto-update interval saved.");
     });
 
-  app.querySelector("#blockAction").addEventListener("change", async (event) => {
-    const blockAction = event.target.value === "close" ? "close" : "redirect";
-    await saveSettings({ blockAction });
-    await boot();
-    const status = app.querySelector("#blockActionStatus");
-    if (status) {
-      status.textContent =
+  app
+    .querySelector("#blockAction")
+    .addEventListener("change", async (event) => {
+      const blockAction = event.target.value === "close" ? "close" : "redirect";
+      await saveSettings({ blockAction });
+      await boot();
+      setBlockActionStatus(
         blockAction === "close"
           ? "Blocked sites will close the tab."
-          : "Blocked sites will show the block page.";
-    }
-  });
+          : "Blocked sites will show the block page.",
+      );
+    });
 
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
     setListsStatus("Updating lists...");
@@ -589,6 +780,20 @@ function setListsStatus(message) {
   const listsStatus = app.querySelector("#listsStatus");
   if (listsStatus) {
     listsStatus.textContent = message;
+  }
+}
+
+function setAutoUpdateStatus(message) {
+  const status = app.querySelector("#autoUpdateStatus");
+  if (status) {
+    status.textContent = message;
+  }
+}
+
+function setBlockActionStatus(message) {
+  const status = app.querySelector("#blockActionStatus");
+  if (status) {
+    status.textContent = message;
   }
 }
 
