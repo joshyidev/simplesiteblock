@@ -17,21 +17,12 @@ export async function guardNavigation(details) {
   if (!/^https?:/i.test(details.url)) return; // ignore chrome-extension:, etc.
   if (!(await isBlocked(details.url))) return;
   try {
-    if ((await getBlockAction()) === "close") {
-      await ext.tabs.remove(details.tabId);
-      return;
-    }
     await ext.tabs.update(details.tabId, {
       url: ext.runtime.getURL(BLOCK_PAGE_PATH),
     });
   } catch {
     // Tab closed or navigated away before we could redirect it.
   }
-}
-
-async function getBlockAction() {
-  const { settings } = await ext.storage.local.get({ settings: {} });
-  return settings && settings.blockAction === "close" ? "close" : "redirect";
 }
 
 async function isBlocked(url) {

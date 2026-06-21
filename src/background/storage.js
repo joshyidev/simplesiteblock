@@ -8,7 +8,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   unlockDelaySeconds: 0,
   lastUnlockAt: 0,
   updateIntervalDays: 7,
-  blockAction: "redirect",
 });
 
 export async function ensureDefaults() {

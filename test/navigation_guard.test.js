@@ -12,19 +12,15 @@ function makeChrome({
   customBlock = [],
   customAllow = [],
   rulesBuiltAt = 1,
-  blockAction = "redirect",
 } = {}) {
   const tabUpdates = [];
-  const tabRemovals = [];
   const store = {
     rulesBuiltAt,
-    settings: { blockAction },
     guardHostsList: { block: listBlock, allow: listAllow },
     guardHostsCustom: { block: customBlock, allow: customAllow },
   };
   return {
     tabUpdates,
-    tabRemovals,
     chrome: {
       storage: {
         local: {
@@ -40,9 +36,6 @@ function makeChrome({
       tabs: {
         update: async (tabId, props) => {
           tabUpdates.push({ tabId, props });
-        },
-        remove: async (tabId) => {
-          tabRemovals.push(tabId);
         },
       },
       runtime: { getURL: (path) => `chrome-extension://testid${path}` },
@@ -82,19 +75,6 @@ test("guardNavigation blocks subdomains of a listed host", async () => {
       tabId: 8,
     });
     assert.equal(mock.tabUpdates.length, 1);
-  });
-});
-
-test("guardNavigation closes the tab when blockAction is close", async () => {
-  const mock = makeChrome({
-    listBlock: ["example.com"],
-    rulesBuiltAt: 21,
-    blockAction: "close",
-  });
-  await withChrome(mock, async () => {
-    await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 5 });
-    assert.deepEqual(mock.tabRemovals, [5]);
-    assert.equal(mock.tabUpdates.length, 0, "does not also redirect");
   });
 });
 

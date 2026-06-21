@@ -88,9 +88,6 @@ function exportSettings(settings) {
     updateIntervalDays: validUpdateInterval(settings.updateIntervalDays)
       ? settings.updateIntervalDays
       : DEFAULT_SETTINGS.updateIntervalDays,
-    blockAction: validBlockAction(settings.blockAction)
-      ? settings.blockAction
-      : DEFAULT_SETTINGS.blockAction,
     unlockDelaySeconds: validUnlockDelay(settings.unlockDelaySeconds)
       ? settings.unlockDelaySeconds
       : DEFAULT_SETTINGS.unlockDelaySeconds,
@@ -113,9 +110,6 @@ function importSettings(settings, password) {
   return {
     ...DEFAULT_SETTINGS,
     updateIntervalDays: settings.updateIntervalDays,
-    blockAction: validBlockAction(settings.blockAction)
-      ? settings.blockAction
-      : DEFAULT_SETTINGS.blockAction,
     unlockDelaySeconds: validUnlockDelay(settings.unlockDelaySeconds)
       ? settings.unlockDelaySeconds
       : DEFAULT_SETTINGS.unlockDelaySeconds,
@@ -191,10 +185,6 @@ function sanitizeLists(lists) {
 
 function validUpdateInterval(value) {
   return Number.isInteger(value) && value >= 0 && value <= 7;
-}
-
-function validBlockAction(value) {
-  return value === "redirect" || value === "close";
 }
 
 function validUnlockDelay(value) {

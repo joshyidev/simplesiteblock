@@ -83,8 +83,8 @@ page commits.
 
 The guard does **not** use `declarativeNetRequest.testMatchOutcome()` — that API
 is only available to **unpacked** extensions, so it throws on a Web Store install
-and the guard would silently never fire (the bug that made both `"close"` mode and
-the Brave backstop fail in production). Instead the guard maintains its own host
+and the guard would silently never fire (the bug that made the Brave backstop fail
+in production). Instead the guard maintains its own host
 matcher: each rebuild persists the same normalized block/allow host sets that
 produced the DNR rules (`saveGuardHosts` per slice in `lists.js`; storage keys
 `guardHostsList`/`guardHostsCustom`), and the guard subtree-matches the navigation
@@ -96,13 +96,8 @@ and the host sets reload only when the rules change. Precedence mirrors the DNR
 priority bands: custom allow > custom block > list allow > list block, so `@@`
 allow exceptions and custom-over-list overrides resolve identically to DNR.
 
-The `blockAction` setting (`"redirect"` default, or `"close"`) decides what the
-guard does on a confirmed block: redirect to the block page (default), or
-`tabs.remove` the tab. Only the guard can close a tab — DNR has no close action,
-so in `"close"` mode the DNR redirect still fires (a brief block-page load is
-possible in Chrome before the tab closes; the blocked content never loads).
-Closing is unconditional — closing the blocked URL's only tab will close its
-window. `tabs.remove` uses only a tab id, so no extra `tabs` permission is needed.
+On a confirmed block the guard always redirects the tab to the block page; DNR
+holds the original request so the blocked content never loads.
 
 The listener must be registered synchronously
 at worker top level so the event can wake a dormant MV3 worker. Requires the

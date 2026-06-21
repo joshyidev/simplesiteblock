@@ -189,16 +189,6 @@ function renderSettingsTab(state) {
             </label>
             <p class="auto-update-status muted" id="autoUpdateStatus" role="status" aria-live="polite"></p>
           </div>
-          <div class="setting-row">
-            <label class="field-inline block-action">
-              When a site is blocked:
-              <select id="blockAction">
-                <option value="redirect" ${state.settings.blockAction !== "close" ? "selected" : ""}>Show block page</option>
-                <option value="close" ${state.settings.blockAction === "close" ? "selected" : ""}>Close the tab</option>
-              </select>
-            </label>
-            <p class="block-action-status muted" id="blockActionStatus" role="status" aria-live="polite"></p>
-          </div>
         </div>
       </div>
 
@@ -581,19 +571,6 @@ function bindEvents(state) {
       setAutoUpdateStatus("Auto-update interval saved.");
     });
 
-  app
-    .querySelector("#blockAction")
-    .addEventListener("change", async (event) => {
-      const blockAction = event.target.value === "close" ? "close" : "redirect";
-      await saveSettings({ blockAction });
-      await boot();
-      setBlockActionStatus(
-        blockAction === "close"
-          ? "Blocked sites will close the tab."
-          : "Blocked sites will show the block page.",
-      );
-    });
-
   app.querySelector("#updateAllButton").addEventListener("click", async () => {
     setListsStatus("Updating lists...");
     setIndexControlsDisabled(true);
@@ -852,13 +829,6 @@ function setListsStatus(message) {
 
 function setAutoUpdateStatus(message) {
   const status = app.querySelector("#autoUpdateStatus");
-  if (status) {
-    status.textContent = message;
-  }
-}
-
-function setBlockActionStatus(message) {
-  const status = app.querySelector("#blockActionStatus");
   if (status) {
     status.textContent = message;
   }

@@ -421,15 +421,13 @@ h3 {
 }
 
 .custom-rules-status,
-.auto-update-status,
-.block-action-status {
+.auto-update-status {
   margin: 0;
   font-size: 13px;
 }
 
 .custom-rules-status:empty,
-.auto-update-status:empty,
-.block-action-status:empty {
+.auto-update-status:empty {
   display: none;
 }
 
@@ -673,10 +671,6 @@ td:nth-child(6) {
 .section-desc {
   margin: 0 0 12px;
   font-size: 13px;
-}
-
-.block-action {
-  margin-bottom: 0;
 }
 
 .backup-status {
