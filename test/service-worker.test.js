@@ -6,6 +6,8 @@ test("service worker routes list CRUD through background commands", async () => 
   const originalFetch = globalThis.fetch;
   const store = {};
   let onMessage;
+  let onStorageChanged;
+  const createdAlarms = [];
 
   globalThis.chrome = {
     storage: {
@@ -25,13 +27,19 @@ test("service worker routes list CRUD through background commands", async () => 
           }
         },
       },
-      onChanged: { addListener: () => {} },
+      onChanged: {
+        addListener(listener) {
+          onStorageChanged = listener;
+        },
+      },
     },
     alarms: {
       onAlarm: { addListener: () => {} },
       get: async () => undefined,
       clear: async () => {},
-      create: () => {},
+      create: (name, options) => {
+        createdAlarms.push({ name, options });
+      },
     },
     runtime: {
       onMessage: {
@@ -94,6 +102,31 @@ test("service worker routes list CRUD through background commands", async () => 
       true,
     );
     assert.deepEqual(store.lists, []);
+
+    assert.equal(
+      (await sendCommand({ type: "ssb:update-all-lists" })).ok,
+      true,
+    );
+    assert.ok(store.lastListUpdateAttemptAt);
+    assert.ok(store.lastListUpdateCompletedAt);
+
+    onStorageChanged(
+      {
+        lastListUpdateAttemptAt: {
+          newValue: store.lastListUpdateAttemptAt,
+        },
+      },
+      "local",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const scheduled = createdAlarms.at(-1);
+    assert.equal(scheduled.name, "update:index");
+    assert.equal(scheduled.options.periodInMinutes, 7 * 1440);
+    assert.equal(
+      scheduled.options.when,
+      store.lastListUpdateAttemptAt + 7 * 24 * 60 * 60 * 1000,
+      "a manual update should reset the automatic cadence",
+    );
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;

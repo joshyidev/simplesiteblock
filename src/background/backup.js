@@ -81,6 +81,8 @@ async function doImportSettingsBackup(text) {
     lists: imported.lists,
     rawLists: {},
     customRules: imported.customRules,
+    lastListUpdateAttemptAt: 0,
+    lastListUpdateCompletedAt: 0,
   });
   // Imported lists arrive without cached bodies; rebuildAll applies custom rules
   // now and flags pendingRebuild until the lists are fetched.

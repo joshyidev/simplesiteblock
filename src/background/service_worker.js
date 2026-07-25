@@ -80,7 +80,7 @@ ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 ext.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (changes.settings || changes.lists || changes.customRules) {
+  if (changes.settings || changes.lastListUpdateAttemptAt) {
     void reconcileAlarms();
   }
 });

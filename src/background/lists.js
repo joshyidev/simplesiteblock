@@ -13,6 +13,8 @@ import {
   saveCustomRuleCount,
   saveCustomRules,
   saveGuardHosts,
+  saveLastListUpdateAttemptAt,
+  saveLastListUpdateCompletedAt,
   saveListDomainCount,
   saveListRuleCount,
   saveLists,
@@ -46,6 +48,8 @@ const CUSTOM_PRIORITIES = {
   redirectPriority: 22,
 };
 const FETCH_TIMEOUT_MS = 30000;
+const MINUTE_MS = 60 * 1000;
+const ALARM_TIME_TOLERANCE_MS = MINUTE_MS;
 
 let listOperationTail = Promise.resolve();
 let updateAllPromise = null;
@@ -214,7 +218,9 @@ export async function updateAllLists() {
 }
 
 async function doUpdateAllLists() {
+  await saveLastListUpdateAttemptAt(Date.now());
   await fetchAndStoreEnabledLists();
+  await saveLastListUpdateCompletedAt(Date.now());
   // Rebuild both slices: this reapplies lists after the fetch and keeps the
   // custom slice consistent (also self-heals rules left by older builds).
   await rebuildAll();
@@ -493,20 +499,57 @@ export async function reconcileAlarms() {
     return;
   }
 
-  if (existing?.periodInMinutes === periodInMinutes) return;
+  const now = Date.now();
+  const periodMs = periodInMinutes * MINUTE_MS;
+  const dueAt = state.lastListUpdateAttemptAt
+    ? state.lastListUpdateAttemptAt + periodMs
+    : now;
+  const overdue = dueAt <= now;
+  // An unset attempt time intentionally schedules a prompt first update after
+  // install/upgrade. Use Chrome's released-extension minimum delay explicitly.
+  const when = overdue ? now + MINUTE_MS : dueAt;
+  const periodMatches = existing?.periodInMinutes === periodInMinutes;
+  const hasScheduledTime = Number.isFinite(existing?.scheduledTime);
+  const scheduleMatches =
+    periodMatches &&
+    hasScheduledTime &&
+    (overdue
+      ? existing.scheduledTime <= when + ALARM_TIME_TOLERANCE_MS
+      : Math.abs(existing.scheduledTime - when) <=
+        ALARM_TIME_TOLERANCE_MS);
+
+  if (scheduleMatches) return;
   if (existing) await ext.alarms.clear(ALARM_NAME);
-  ext.alarms.create(ALARM_NAME, {
-    delayInMinutes: periodInMinutes,
+  await ext.alarms.create(ALARM_NAME, {
+    when,
     periodInMinutes,
   });
 }
 
 export async function handleAlarm(alarm) {
   if (alarm.name !== ALARM_NAME) return;
+  const firedAt = Date.now();
   try {
     await updateAllLists();
   } catch {
     // Errors are stored per-list; keep the worker quiet.
+  } finally {
+    await recordAlarmAttempt(firedAt);
+  }
+}
+
+// The cadence is anchored to lastListUpdateAttemptAt, which doUpdateAllLists
+// records before fetching. If the update failed before getting that far,
+// reconcileAlarms would keep seeing an overdue schedule and re-arm at the
+// minimum delay on every worker wake, refetching every minute. Recording the
+// fire time here makes a failed run cost one period, like a failed fetch does.
+async function recordAlarmAttempt(firedAt) {
+  try {
+    const state = await getState({ includeRawLists: false });
+    if (state.lastListUpdateAttemptAt >= firedAt) return;
+    await saveLastListUpdateAttemptAt(firedAt);
+  } catch {
+    // Storage is unavailable; the next alarm tries again.
   }
 }
 

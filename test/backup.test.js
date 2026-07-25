@@ -37,6 +37,8 @@ function makeState() {
       builtAt: 1,
     },
     pendingRebuild: true,
+    lastListUpdateAttemptAt: 2,
+    lastListUpdateCompletedAt: 3,
   };
 }
 
@@ -60,6 +62,8 @@ test("settings export omits derived and cached data by default", () => {
   assert.equal("compiledIndex" in payload, false);
   assert.equal("pendingRebuild" in payload, false);
   assert.equal("rawLists" in payload, false);
+  assert.equal("lastListUpdateAttemptAt" in payload, false);
+  assert.equal("lastListUpdateCompletedAt" in payload, false);
   assert.equal("password" in payload, false);
   assert.equal("password" in payload.settings, false);
   assert.deepEqual(payload.lists[0], {
@@ -212,7 +216,10 @@ test("settings import clears derived list metadata", () => {
 
 test("settings import stores lists and rules and marks pending", async () => {
   const originalChrome = globalThis.chrome;
-  const store = {};
+  const store = {
+    lastListUpdateAttemptAt: 123,
+    lastListUpdateCompletedAt: 456,
+  };
   const payload = makePayload({
     lists: [
       {
@@ -259,6 +266,8 @@ test("settings import stores lists and rules and marks pending", async () => {
     assert.equal(store.lists[0].id, "list-1");
     assert.deepEqual(store.rawLists, {});
     assert.equal(store.pendingRebuild, true);
+    assert.equal(store.lastListUpdateAttemptAt, 0);
+    assert.equal(store.lastListUpdateCompletedAt, 0);
   } finally {
     globalThis.chrome = originalChrome;
   }

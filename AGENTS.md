@@ -49,7 +49,21 @@ next Update All. So a removed or disabled list keeps blocking until then.
 `pendingRebuild` is recomputed against `appliedSignature` (a fingerprint of the
 enabled lists), so a net-zero edit (disable then re-enable) clears it; it stays
 set when an enabled list has no cached body yet. Custom rules apply immediately
-to their own slice and never affect `pendingRebuild`.
+to their own slice and never affect `pendingRebuild`. List CRUD also does not
+change the automatic-update cadence.
+
+Automatic list updates are anchored to the persisted
+`lastListUpdateAttemptAt`, not to when Chrome happens to create or restore the
+`update:index` alarm. A missing alarm preserves the remaining delay; if the
+last attempt is overdue (or absent after install/upgrade), reconciliation keeps
+an already-pending alarm or schedules a prompt update. Update All records the
+attempt before fetching and `lastListUpdateCompletedAt` after all list fetches
+settle, before rebuilding DNR. The options UI reports this as "Lists checked";
+`rulesBuiltAt` remains an internal navigation-guard cache version. `handleAlarm`
+re-records the attempt if a run failed before getting that far, so a broken
+update costs one period instead of leaving the schedule permanently overdue —
+which would re-arm the alarm at the minimum delay on every worker wake and
+refetch every minute.
 
 Startup reconciliation: dynamic rules persist in the browser keyed to the
 extension ID, so they can outlive the storage that produced them (an unpacked
@@ -177,13 +191,16 @@ Load the Chrome extension manually:
   sets `pendingRebuild`. URL edits must also clear cached raw text and
   validators (etag/last-modified) for that list.
 - Name-only list edits should not clear cached raw text or set `pendingRebuild`.
-- The global list update alarm is named `update:index`. Be careful when changing
-  alarm names because old extension installs may have persisted alarms.
+- The global list update alarm is named `update:index` and is anchored to
+  `lastListUpdateAttemptAt`. Be careful when changing alarm names because old
+  extension installs may have persisted alarms. List CRUD deliberately does not
+  re-anchor it; manual and automatic Update All attempts do.
 - List fetches reject obvious HTML and enforce response size limits.
 - Settings exports intentionally omit derived/cache data such as `pendingRebuild`,
-  raw list bodies, and the navigation guard's `guardHostsList`/`guardHostsCustom`
-  sets (rebuilt on import). Imports must still reject a `compiledIndex` field for
-  backward compatibility with v1 exports.
+  `lastListUpdateAttemptAt`, `lastListUpdateCompletedAt`, raw list bodies, and
+  the navigation guard's `guardHostsList`/`guardHostsCustom` sets (rebuilt on
+  import). Imports reset the two update timestamps and must still reject a
+  `compiledIndex` field for backward compatibility with v1 exports.
 - The password lock is a personal accountability gate on the options page, not a
   security boundary. Passwords are stored as plaintext settings when enabled.
 

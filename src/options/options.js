@@ -128,7 +128,7 @@ function renderListsTab(state, { animatePendingIn, animatePendingOut }) {
           <button id="updateAllButton" type="button" ${editingListId ? "disabled" : ""}>Update lists</button>
           <p class="list-status muted" id="listsStatus" role="status" aria-live="polite"></p>
         </div>
-        <p class="page-meta muted list-summary" id="listsMeta">${escapeHtml(statsText(state))}</p>
+        <p class="page-meta muted list-summary" id="listsMeta">${statsHtml(state)}</p>
       </div>
       <div class="list-divider" aria-hidden="true"></div>
       ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
@@ -175,7 +175,7 @@ function renderSettingsTab(state) {
         <div class="setting-control general-settings">
           <div class="setting-row">
             <label class="field-inline">
-              Auto-update every
+              Auto-update lists every
               <select id="updateInterval" ${editingListId ? "disabled" : ""}>
                 <option value="0" ${state.settings.updateIntervalDays === 0 ? "selected" : ""}>Manual</option>
                 ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<option value="${d}" ${state.settings.updateIntervalDays === d ? "selected" : ""}>${d} day${d === 1 ? "" : "s"}</option>`).join("")}
@@ -302,13 +302,19 @@ function renderAboutTab() {
 // Reads the blocked-domain count recorded by the worker at rebuild time rather
 // than pulling the full dynamic rule set into the page (which spikes memory on
 // large lists). Synchronous, so the stats render with the rest of the page.
-function statsText(state) {
-  const built = state.rulesBuiltAt
-    ? new Date(state.rulesBuiltAt).toLocaleString()
+function statsHtml(state) {
+  const listsChecked = state.lastListUpdateCompletedAt
+    ? new Date(state.lastListUpdateCompletedAt).toLocaleString()
     : "Never";
   const domains =
     (state.appliedListDomainCount || 0) + (state.appliedCustomDomainCount || 0);
-  return `${domains.toLocaleString()} domains blocked · Last built: ${built}`;
+  const items = [
+    `${domains.toLocaleString()} domains blocked`,
+    `Lists checked: ${listsChecked}`,
+  ];
+  return items
+    .map((item) => `<span class="list-summary-item">${escapeHtml(item)}</span>`)
+    .join("");
 }
 
 function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
@@ -541,9 +547,7 @@ function bindEvents(state) {
         await boot();
         const result = response.result;
         if (result?.error) {
-          setListsStatus(
-            `List added, but it has an error: ${result.error}`,
-          );
+          setListsStatus(`List added, but it has an error: ${result.error}`);
         } else {
           setListsStatus(
             `List added with ${Number(result?.ruleCount || 0).toLocaleString()} entries.`,

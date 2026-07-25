@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addList,
   assertListRedirectBudget,
+  handleAlarm,
   normalizeListUrl,
   parseCustomRules,
   parseListText,
@@ -17,6 +18,9 @@ import {
   updateListSettings,
 } from "../src/background/lists.js";
 import { rawListStorageKey } from "../src/background/storage.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 
 test("list parser automatically detects hosts or adblock format", () => {
   const hosts = parseListText("0.0.0.0 ads.example\n127.0.0.1 tracker.example");
@@ -534,6 +538,48 @@ test("updateAllLists fetches full body when validators exist without cached body
   }
 });
 
+test("updateAllLists records attempt and completion timestamps", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const { chrome, store } = makeChromeMock();
+  let now = 1000;
+  globalThis.chrome = chrome;
+  Date.now = () => now++;
+
+  try {
+    await updateAllLists();
+    assert.equal(store.lastListUpdateAttemptAt, 1000);
+    assert.ok(
+      store.lastListUpdateCompletedAt > store.lastListUpdateAttemptAt,
+      "completion should be recorded after the attempt begins",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("updateAllLists records a completed check when rule rebuilding fails", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  mock.chrome.declarativeNetRequest.updateDynamicRules = async () => {
+    throw new Error("DNR update failed");
+  };
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await assert.rejects(() => updateAllLists(), /DNR update failed/);
+    assert.ok(mock.store.lastListUpdateAttemptAt);
+    assert.ok(
+      mock.store.lastListUpdateCompletedAt >=
+        mock.store.lastListUpdateAttemptAt,
+      "fetch completion should survive a later rule-application failure",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
 test("concurrent updateAllLists calls share one in-flight update", async () => {
   const originalChrome = globalThis.chrome;
   const originalFetch = globalThis.fetch;
@@ -890,6 +936,15 @@ test("updateCustomRules validates and saves rules", async () => {
     const statsWrite = written.find((w) => "appliedCustomDomainCount" in w);
     assert.ok(statsWrite, "custom rule stats should be written");
     assert.equal(statsWrite.appliedCustomDomainCount, 2);
+    assert.equal(
+      written.some(
+        (write) =>
+          "lastListUpdateAttemptAt" in write ||
+          "lastListUpdateCompletedAt" in write,
+      ),
+      false,
+      "custom rules must not postpone subscribed-list updates",
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -940,81 +995,292 @@ test("updateCustomRules rejects non-Adblock text", async () => {
   }
 });
 
-test("reconcileAlarms skips creating alarm when one with correct period exists", async () => {
-  const originalChrome = globalThis.chrome;
+function makeAlarmChrome({ existing, intervalDays, lastAttemptAt = 0 }) {
   const created = [];
   const cleared = [];
-  globalThis.chrome = {
-    alarms: {
-      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
-      clear: async (name) => {
-        cleared.push(name);
+  return {
+    chrome: {
+      alarms: {
+        get: async () => existing,
+        clear: async (name) => {
+          cleared.push(name);
+        },
+        create: (name, opts) => {
+          created.push({ name, opts });
+        },
       },
-      create: (name, opts) => {
-        created.push({ name, opts });
-      },
-    },
-    storage: {
-      local: {
-        async get(defaults) {
-          return { ...defaults, settings: { updateIntervalDays: 7 } };
+      storage: {
+        local: {
+          async get(defaults) {
+            return {
+              ...defaults,
+              settings: { updateIntervalDays: intervalDays },
+              lastListUpdateAttemptAt: lastAttemptAt,
+            };
+          },
         },
       },
     },
+    created,
+    cleared,
   };
+}
+
+test("reconcileAlarms keeps an alarm anchored to the last update", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const lastAttemptAt = now;
+  const mock = makeAlarmChrome({
+    existing: {
+      name: "update:index",
+      periodInMinutes: 7 * 1440,
+      scheduledTime: lastAttemptAt + 7 * DAY_MS,
+    },
+    intervalDays: 7,
+    lastAttemptAt,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
 
   try {
     await reconcileAlarms();
     assert.equal(
-      created.length,
+      mock.created.length,
       0,
-      "alarm should not be recreated when period matches",
+      "an accurately scheduled alarm should be preserved",
     );
     assert.equal(
-      cleared.length,
+      mock.cleared.length,
       0,
-      "alarm should not be cleared when period matches",
+      "an accurately scheduled alarm should not be cleared",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms clears and recreates alarm when interval changes", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: {
+      name: "update:index",
+      periodInMinutes: 7 * 1440,
+      scheduledTime: now + 7 * DAY_MS,
+    },
+    intervalDays: 1,
+    lastAttemptAt: now,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    assert.ok(
+      mock.cleared.includes("update:index"),
+      "stale alarm should be cleared",
+    );
+    assert.deepEqual(mock.created, [
+      {
+        name: "update:index",
+        opts: {
+          when: now + DAY_MS,
+          periodInMinutes: 1440,
+        },
+      },
+    ]);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms preserves the remaining delay after alarm loss", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: undefined,
+    intervalDays: 3,
+    lastAttemptAt: now - DAY_MS,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    assert.deepEqual(mock.created, [
+      {
+        name: "update:index",
+        opts: {
+          when: now + 2 * DAY_MS,
+          periodInMinutes: 3 * 1440,
+        },
+      },
+    ]);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms schedules an overdue update after the minimum delay", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: undefined,
+    intervalDays: 3,
+    lastAttemptAt: now - 5 * DAY_MS,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    assert.deepEqual(mock.created, [
+      {
+        name: "update:index",
+        opts: {
+          when: now + MINUTE_MS,
+          periodInMinutes: 3 * 1440,
+        },
+      },
+    ]);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms treats an unset attempt time as promptly due", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: undefined,
+    intervalDays: 3,
+    lastAttemptAt: 0,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    assert.deepEqual(mock.created, [
+      {
+        name: "update:index",
+        opts: {
+          when: now + MINUTE_MS,
+          periodInMinutes: 3 * 1440,
+        },
+      },
+    ]);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms preserves a pending overdue alarm across worker wakes", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  let now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: {
+      name: "update:index",
+      periodInMinutes: 3 * 1440,
+      scheduledTime: now - 3 * 60 * MINUTE_MS,
+    },
+    intervalDays: 3,
+    lastAttemptAt: now - 5 * DAY_MS,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    now += 2 * 60 * MINUTE_MS;
+    await reconcileAlarms();
+    assert.deepEqual(mock.cleared, []);
+    assert.deepEqual(mock.created, []);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("reconcileAlarms corrects a same-period alarm postponed by reload", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalNow = Date.now;
+  const now = 1_700_000_000_000;
+  const mock = makeAlarmChrome({
+    existing: {
+      name: "update:index",
+      periodInMinutes: 3 * 1440,
+      scheduledTime: now + 3 * DAY_MS,
+    },
+    intervalDays: 3,
+    lastAttemptAt: now - 5 * DAY_MS,
+  });
+  globalThis.chrome = mock.chrome;
+  Date.now = () => now;
+
+  try {
+    await reconcileAlarms();
+    assert.deepEqual(mock.cleared, ["update:index"]);
+    assert.equal(mock.created[0].opts.when, now + MINUTE_MS);
+  } finally {
+    globalThis.chrome = originalChrome;
+    Date.now = originalNow;
+  }
+});
+
+test("handleAlarm anchors the cadence when the update records no attempt", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock();
+  const storageSet = mock.chrome.storage.local.set;
+  let failAttemptWrite = true;
+  mock.chrome.storage.local.set = async (patch) => {
+    if (failAttemptWrite && "lastListUpdateAttemptAt" in patch) {
+      failAttemptWrite = false;
+      throw new Error("storage unavailable");
+    }
+    return storageSet(patch);
+  };
+  globalThis.chrome = mock.chrome;
+  const firedAt = Date.now();
+
+  try {
+    await handleAlarm({ name: "update:index" });
+    assert.ok(
+      mock.store.lastListUpdateAttemptAt >= firedAt,
+      "a failed update must still advance the anchor, or reconcileAlarms re-arms every minute",
     );
   } finally {
     globalThis.chrome = originalChrome;
   }
 });
 
-test("reconcileAlarms clears and recreates alarm when interval changes", async () => {
+test("handleAlarm does not re-anchor a successful update", async () => {
   const originalChrome = globalThis.chrome;
-  const created = [];
-  const cleared = [];
-  globalThis.chrome = {
-    alarms: {
-      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
-      clear: async (name) => {
-        cleared.push(name);
-      },
-      create: (name, opts) => {
-        created.push({ name, opts });
-      },
-    },
-    storage: {
-      local: {
-        async get(defaults) {
-          return { ...defaults, settings: { updateIntervalDays: 1 } };
-        },
-      },
-    },
-  };
+  const mock = makeChromeMock();
+  globalThis.chrome = mock.chrome;
 
   try {
-    await reconcileAlarms();
-    assert.ok(
-      cleared.includes("update:index"),
-      "stale alarm should be cleared",
+    await handleAlarm({ name: "update:index" });
+    const attemptWrites = mock.written.filter(
+      (write) => "lastListUpdateAttemptAt" in write,
     );
-    assert.ok(
-      created.some(
-        (c) => c.name === "update:index" && c.opts.periodInMinutes === 1440,
-      ),
-      "alarm should be recreated with new period",
+    assert.equal(
+      attemptWrites.length,
+      1,
+      "the update's own attempt record should be left alone",
     );
+    assert.ok(mock.store.lastListUpdateCompletedAt);
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -1176,28 +1442,16 @@ test("reconcileRules restores an allow-only custom slice that vanished", async (
 
 test("reconcileAlarms clears alarm when interval is set to 0 (manual)", async () => {
   const originalChrome = globalThis.chrome;
-  const cleared = [];
-  globalThis.chrome = {
-    alarms: {
-      get: async () => ({ name: "update:index", periodInMinutes: 7 * 1440 }),
-      clear: async (name) => {
-        cleared.push(name);
-      },
-      create: () => {},
-    },
-    storage: {
-      local: {
-        async get(defaults) {
-          return { ...defaults, settings: { updateIntervalDays: 0 } };
-        },
-      },
-    },
-  };
+  const mock = makeAlarmChrome({
+    existing: { name: "update:index", periodInMinutes: 7 * 1440 },
+    intervalDays: 0,
+  });
+  globalThis.chrome = mock.chrome;
 
   try {
     await reconcileAlarms();
     assert.ok(
-      cleared.includes("update:index"),
+      mock.cleared.includes("update:index"),
       "alarm should be cleared for manual mode",
     );
   } finally {

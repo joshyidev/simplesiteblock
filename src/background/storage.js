@@ -37,6 +37,8 @@ export async function getState({ includeRawLists = false } = {}) {
     customRules: "",
     pendingRebuild: false,
     rulesBuiltAt: 0,
+    lastListUpdateAttemptAt: 0,
+    lastListUpdateCompletedAt: 0,
     appliedSignature: "",
     appliedListDomainCount: 0,
     appliedCustomDomainCount: 0,
@@ -60,6 +62,8 @@ export async function getState({ includeRawLists = false } = {}) {
       typeof stored.customRules === "string" ? stored.customRules : "",
     pendingRebuild: Boolean(stored.pendingRebuild),
     rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
+    lastListUpdateAttemptAt: Number(stored.lastListUpdateAttemptAt) || 0,
+    lastListUpdateCompletedAt: Number(stored.lastListUpdateCompletedAt) || 0,
     appliedSignature:
       typeof stored.appliedSignature === "string"
         ? stored.appliedSignature
@@ -133,6 +137,14 @@ export async function savePendingRebuild(pending) {
 
 export async function saveRulesBuiltAt(timestamp) {
   await ext.storage.local.set({ rulesBuiltAt: timestamp });
+}
+
+export async function saveLastListUpdateAttemptAt(timestamp) {
+  await ext.storage.local.set({ lastListUpdateAttemptAt: timestamp });
+}
+
+export async function saveLastListUpdateCompletedAt(timestamp) {
+  await ext.storage.local.set({ lastListUpdateCompletedAt: timestamp });
 }
 
 export async function saveAppliedSignature(signature) {
