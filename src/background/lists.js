@@ -16,6 +16,7 @@ import {
   saveListDomainCount,
   saveListRuleCount,
   saveLists,
+  saveListsWithRawList,
   savePendingRebuild,
   saveRawList,
   saveRulesBuiltAt,
@@ -46,18 +47,25 @@ const CUSTOM_PRIORITIES = {
 };
 const FETCH_TIMEOUT_MS = 30000;
 
+let listOperationTail = Promise.resolve();
 let updateAllPromise = null;
 
-export async function addList({ name, url }) {
+// List bodies and metadata live under separate storage keys, so serialize every
+// workflow that can change either side of that relationship.
+export function runListOperation(operation) {
+  const result = listOperationTail.then(operation, operation);
+  listOperationTail = result.catch(() => {});
+  return result;
+}
+
+export function addList(input) {
+  return runListOperation(() => doAddList(input));
+}
+
+async function doAddList({ name, url }) {
   const state = await getState({ includeRawLists: false });
   const normalizedUrl = normalizeListUrl(url);
-  if (
-    state.lists.some(
-      (list) => normalizeStoredListUrl(list.url) === normalizedUrl,
-    )
-  ) {
-    throw new Error("This list has already been added.");
-  }
+  assertListUrlAvailable(state.lists, normalizedUrl);
 
   const list = {
     id: crypto.randomUUID(),
@@ -71,8 +79,37 @@ export async function addList({ name, url }) {
     ruleCount: 0,
   };
 
-  await saveLists([...state.lists, list]);
-  await recomputePending();
+  // Prime only the new subscription so its count is available immediately.
+  // Applying the list slice remains an explicit Update Lists operation.
+  let outcome;
+  try {
+    outcome = { ok: true, result: await fetchListResult(list) };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+
+  const storedList = mergeListFetchOutcome(list, outcome);
+  const latest = await getState({ includeRawLists: false });
+  assertListUrlAvailable(latest.lists, normalizedUrl);
+  await saveListsWithRawList([...latest.lists, storedList], {
+    listId: list.id,
+    text: outcome.ok ? outcome.result.downloadedText : null,
+    pendingRebuild: true,
+  });
+
+  const error = fetchOutcomeError(outcome);
+  if (error) {
+    return {
+      listId: list.id,
+      ruleCount: null,
+      error,
+    };
+  }
+  return {
+    listId: list.id,
+    ruleCount: outcome.result.ruleCount,
+    error: null,
+  };
 }
 
 export function normalizeListUrl(value) {
@@ -91,14 +128,30 @@ function normalizeStoredListUrl(value) {
   }
 }
 
-export async function removeList(listId) {
+function assertListUrlAvailable(lists, normalizedUrl) {
+  if (
+    lists.some((list) => normalizeStoredListUrl(list.url) === normalizedUrl)
+  ) {
+    throw new Error("This list has already been added.");
+  }
+}
+
+export function removeList(listId) {
+  return runListOperation(() => doRemoveList(listId));
+}
+
+async function doRemoveList(listId) {
   const state = await getState({ includeRawLists: false });
   await saveLists(state.lists.filter((list) => list.id !== listId));
   await removeRawList(listId);
   await recomputePending();
 }
 
-export async function updateListIdentity(listId, { name, url }) {
+export function updateListIdentity(listId, identity) {
+  return runListOperation(() => doUpdateListIdentity(listId, identity));
+}
+
+async function doUpdateListIdentity(listId, { name, url }) {
   const state = await getState({ includeRawLists: false });
   const target = state.lists.find((list) => list.id === listId);
   if (!target) throw new Error("List not found");
@@ -137,7 +190,11 @@ export async function updateListIdentity(listId, { name, url }) {
   return lists;
 }
 
-export async function updateListSettings(listId, patch) {
+export function updateListSettings(listId, patch) {
+  return runListOperation(() => doUpdateListSettings(listId, patch));
+}
+
+async function doUpdateListSettings(listId, patch) {
   const state = await getState({ includeRawLists: false });
   const lists = state.lists.map((list) =>
     list.id === listId ? { ...list, ...patch } : list,
@@ -148,7 +205,7 @@ export async function updateListSettings(listId, patch) {
 
 export async function updateAllLists() {
   if (updateAllPromise) return updateAllPromise;
-  updateAllPromise = doUpdateAllLists();
+  updateAllPromise = runListOperation(doUpdateAllLists);
   try {
     return await updateAllPromise;
   } finally {
@@ -304,22 +361,10 @@ async function fetchAndStoreEnabledLists() {
   await Promise.allSettled(
     enabledLists.map(async (list) => {
       try {
-        const cachedText = await getRawList(list.id);
-        const result = await fetchList(list, {
-          hasCachedBody: cachedText !== null,
-        });
-        if (result.notModified && cachedText === null) {
-          throw new Error("Server returned not modified but no cached body.");
-        }
-        const text = result.notModified ? cachedText : result.text;
-        if (!result.notModified) await saveRawList(list.id, result.text);
+        const result = await fetchListResult(list);
         fetchResults.set(list.id, {
           ok: true,
-          result: {
-            etag: result.etag,
-            lastModified: result.lastModified,
-            ruleCount: countParsedText(text, list.format),
-          },
+          result,
         });
       } catch (error) {
         fetchResults.set(list.id, { ok: false, error });
@@ -327,24 +372,88 @@ async function fetchAndStoreEnabledLists() {
     }),
   );
 
-  const lists = state.lists.map((list) => {
+  const fetchedLists = new Map(enabledLists.map((list) => [list.id, list]));
+  const latest = await getState({ includeRawLists: false });
+  const rawWrites = [];
+  const lists = latest.lists.map((list) => {
+    const fetchedList = fetchedLists.get(list.id);
     const outcome = fetchResults.get(list.id);
-    if (!outcome) return list;
-    if (!outcome.ok) return { ...list, lastError: outcome.error.message };
-    const { result } = outcome;
-    return {
-      ...list,
-      lastError: null,
-      etag: result.etag ?? list.etag,
-      lastModified: result.lastModified ?? list.lastModified,
-      ruleCount: result.ruleCount ?? list.ruleCount,
-    };
+    if (!outcome || !sameListSource(list, fetchedList)) return list;
+    if (outcome.ok && outcome.result.downloadedText !== null) {
+      rawWrites.push(saveRawList(list.id, outcome.result.downloadedText));
+    }
+    return mergeListFetchOutcome(list, outcome);
   });
 
+  await Promise.all(rawWrites);
   await saveLists(lists);
 }
 
-export async function updateCustomRules(rawRules) {
+function sameListSource(current, fetched) {
+  return (
+    fetched &&
+    current.url === fetched.url &&
+    current.format === fetched.format &&
+    current.enabled === fetched.enabled
+  );
+}
+
+async function fetchListResult(list) {
+  const cachedText = await getRawList(list.id);
+  const result = await fetchList(list, {
+    hasCachedBody: cachedText !== null,
+  });
+  if (result.notModified && cachedText === null) {
+    throw new Error("Server returned not modified but no cached body.");
+  }
+
+  const text = result.notModified ? cachedText : result.text;
+  let parseError = null;
+  let ruleCount = 0;
+  try {
+    ruleCount = countRules(parseListText(text, list.format));
+  } catch (error) {
+    parseError = error;
+  }
+
+  return {
+    downloadedText: result.notModified ? null : result.text,
+    etag: result.etag,
+    lastModified: result.lastModified,
+    ruleCount,
+    parseError,
+  };
+}
+
+function mergeListFetchOutcome(list, outcome) {
+  if (!outcome.ok) {
+    return {
+      ...list,
+      lastError: outcome.error?.message || "List update failed.",
+    };
+  }
+  const { result } = outcome;
+  return {
+    ...list,
+    lastError: result.parseError?.message || null,
+    etag: result.etag ?? list.etag,
+    lastModified: result.lastModified ?? list.lastModified,
+    ruleCount: result.parseError ? 0 : result.ruleCount,
+  };
+}
+
+function fetchOutcomeError(outcome) {
+  if (!outcome.ok) {
+    return outcome.error?.message || "List update failed.";
+  }
+  return outcome.result.parseError?.message || null;
+}
+
+export function updateCustomRules(rawRules) {
+  return runListOperation(() => doUpdateCustomRules(rawRules));
+}
+
+async function doUpdateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
   assertCustomRulesWithinLimit(parseCustomRules(customRules));
   await saveCustomRules(customRules);
@@ -369,14 +478,6 @@ export function assertCustomRulesWithinLimit(parsed) {
     throw new Error(
       `Custom rules are limited to ${MAX_CUSTOM_DOMAINS} domains; found ${domainCount.toLocaleString()}. Put large lists in a subscription instead.`,
     );
-  }
-}
-
-function countParsedText(text, format) {
-  try {
-    return countRules(parseListText(text, format));
-  } catch {
-    return 0;
   }
 }
 

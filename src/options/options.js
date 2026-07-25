@@ -1,10 +1,4 @@
 import { createSettingsExport } from "../background/backup.js";
-import {
-  addList,
-  removeList,
-  updateListIdentity,
-  updateListSettings,
-} from "../background/lists.js";
 import { getState, saveSettings } from "../background/storage.js";
 import { extensionApi as ext } from "../extension_api.js";
 import { isOptionsUnlocked, lockOptions, renderLock } from "./lock.js";
@@ -409,7 +403,7 @@ function renderLists(lists) {
             <th>Enabled</th>
             <th>Name</th>
             <th>URL</th>
-            <th>Rules</th>
+            <th>Entries</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -425,13 +419,14 @@ function renderListRow(list) {
   const error = list.lastError
     ? `<div class="error">${escapeHtml(list.lastError)}</div>`
     : "";
+  const ruleCount = formatRuleCount(list.ruleCount);
   if (list.id === editingListId) {
     return `
       <tr data-list-id="${escapeHtml(list.id)}">
         <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled" disabled></td>
         <td><input class="edit-list-name" type="text" aria-label="List name" value="${escapeHtml(list.name)}"></td>
         <td><input class="edit-list-url" type="url" aria-label="List URL" value="${escapeHtml(list.url)}" required></td>
-        <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
+        <td>${ruleCount}${error}</td>
         <td class="actions">
           <button class="save-list-edit ghost" type="button">Save</button>
           <button class="cancel-list-edit ghost danger" type="button">Cancel</button>
@@ -446,7 +441,7 @@ function renderListRow(list) {
       <td><input class="list-enabled" type="checkbox" ${list.enabled ? "checked" : ""} aria-label="Enabled"></td>
       <td class="name-cell" title="${escapeHtml(list.name)}">${escapeHtml(list.name)}</td>
       <td class="url-cell muted" title="${escapeHtml(list.url)}">${escapeHtml(list.url)}</td>
-      <td>${Number(list.ruleCount || 0).toLocaleString()}${error}</td>
+      <td>${ruleCount}${error}</td>
       <td class="actions">
         <button class="edit-list" type="button" ${actionDisabled}>Edit</button>
         <button class="remove-list danger" type="button" ${actionDisabled}>Remove</button>
@@ -488,6 +483,13 @@ function bindTabs() {
   });
 }
 
+function formatRuleCount(value) {
+  const count = Number(value);
+  return Number.isInteger(count) && count > 0
+    ? count.toLocaleString()
+    : '<span class="muted">—</span>';
+}
+
 function setActiveTab(tabId, { updateLocation = true } = {}) {
   if (!isKnownTab(tabId)) return;
   activeTab = tabId;
@@ -527,15 +529,29 @@ function bindEvents(state) {
       event.preventDefault();
       const formElement = event.currentTarget;
       const form = new FormData(formElement);
+      setListsStatus("Adding and checking list...");
+      setIndexControlsDisabled(true);
       try {
-        await addList({
+        const response = await runBackgroundCommand({
+          type: "ssb:add-list",
           name: form.get("name"),
           url: form.get("url"),
         });
         formElement.reset();
         await boot();
+        const result = response.result;
+        if (result?.error) {
+          setListsStatus(
+            `List added, but it has an error: ${result.error}`,
+          );
+        } else {
+          setListsStatus(
+            `List added with ${Number(result?.ruleCount || 0).toLocaleString()} entries.`,
+          );
+        }
       } catch (error) {
         const message = error.message || "Something went wrong.";
+        await boot();
         setListsStatus(message);
         window.alert(message);
       }
@@ -591,8 +607,17 @@ function bindEvents(state) {
     const enabledInput = row.querySelector(".list-enabled:not(:disabled)");
     if (enabledInput) {
       enabledInput.addEventListener("change", async (event) => {
-        await updateListSettings(listId, { enabled: event.target.checked });
-        await boot();
+        const enabled = event.target.checked;
+        await runListUiCommand({
+          message: {
+            type: "ssb:update-list-enabled",
+            listId,
+            enabled,
+          },
+          pendingText: "Saving list setting...",
+          waitingText: "Waiting for the current list update to finish...",
+          successText: enabled ? "List enabled." : "List disabled.",
+        });
       });
     }
 
@@ -610,7 +635,9 @@ function bindEvents(state) {
         setListsStatus("Saving list...");
         setIndexControlsDisabled(true);
         try {
-          await updateListIdentity(listId, {
+          await runBackgroundCommand({
+            type: "ssb:update-list-identity",
+            listId,
             name: row.querySelector(".edit-list-name").value,
             url: row.querySelector(".edit-list-url").value,
           });
@@ -640,9 +667,15 @@ function bindEvents(state) {
         const list = state.lists.find((item) => item.id === listId);
         const listName = list?.name || "this list";
         if (!window.confirm(`Remove "${listName}"?`)) return;
-        await removeList(listId);
-        if (editingListId === listId) editingListId = null;
-        await boot();
+        await runListUiCommand({
+          message: { type: "ssb:remove-list", listId },
+          pendingText: "Removing list...",
+          waitingText: "Waiting for the current list update to finish...",
+          successText: "List removed.",
+          onSuccess: () => {
+            if (editingListId === listId) editingListId = null;
+          },
+        });
       });
     }
   }
@@ -843,6 +876,38 @@ async function runBackgroundCommand(message) {
   }
   if (response?.ok) return response;
   throw new Error(response?.error || "Background worker unavailable.");
+}
+
+async function runListUiCommand({
+  message,
+  pendingText,
+  waitingText,
+  successText,
+  onSuccess,
+}) {
+  setListsStatus(pendingText);
+  setIndexControlsDisabled(true);
+
+  const waitingTimer = setTimeout(() => {
+    setListsStatus(waitingText);
+  }, 1000);
+
+  try {
+    await runBackgroundCommand(message);
+    clearTimeout(waitingTimer);
+    onSuccess?.();
+    await boot();
+    setListsStatus(successText);
+  } catch (error) {
+    clearTimeout(waitingTimer);
+    const messageText = error.message || "Something went wrong.";
+    await boot();
+    setListsStatus(messageText);
+    window.alert(messageText);
+  } finally {
+    clearTimeout(waitingTimer);
+    setIndexControlsDisabled(false);
+  }
 }
 
 function setCustomRulesStatus(message) {

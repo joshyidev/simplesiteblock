@@ -5,6 +5,7 @@ import {
   importSettingsBackup,
   parseSettingsImport,
 } from "../src/background/backup.js";
+import { updateAllLists } from "../src/background/lists.js";
 import { rawListStorageKey } from "../src/background/storage.js";
 
 function makeState() {
@@ -373,5 +374,94 @@ test("settings import clears cached raw list bodies", async () => {
     assert.equal(store.pendingRebuild, true);
   } finally {
     globalThis.chrome = originalChrome;
+  }
+});
+
+test("settings import waits for Update All and removes its downloaded body", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const store = {
+    lists: [
+      {
+        id: "old-list",
+        name: "Old",
+        url: "https://example.com/old.txt",
+        format: "auto",
+        enabled: true,
+        lastError: null,
+        etag: null,
+        lastModified: null,
+        ruleCount: 0,
+      },
+    ],
+  };
+  const payload = makePayload({
+    lists: [
+      {
+        id: "new-list",
+        name: "New",
+        url: "https://example.com/new.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+  });
+  let releaseFetch;
+  let markFetchStarted;
+  const fetchReleased = new Promise((resolve) => {
+    releaseFetch = resolve;
+  });
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve;
+  });
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get(defaults) {
+          return { ...defaults, ...store };
+        },
+        async set(patch) {
+          Object.assign(store, patch);
+        },
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            delete store[key];
+          }
+        },
+      },
+    },
+    alarms: {
+      get: async () => undefined,
+      clear: async () => {},
+      create: () => {},
+    },
+  };
+  globalThis.fetch = async () => {
+    markFetchStarted();
+    await fetchReleased;
+    return new Response("old.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const update = updateAllLists();
+    await fetchStarted;
+    const importing = importSettingsBackup(JSON.stringify(payload));
+    await Promise.resolve();
+    assert.equal(store.lists[0].id, "old-list");
+
+    releaseFetch();
+    await Promise.all([update, importing]);
+
+    assert.equal(store.lists.length, 1);
+    assert.equal(store.lists[0].id, "new-list");
+    assert.equal(rawListStorageKey("old-list") in store, false);
+    assert.equal(rawListStorageKey("new-list") in store, false);
+    assert.equal(store.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
   }
 });

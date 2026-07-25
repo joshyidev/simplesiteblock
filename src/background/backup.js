@@ -4,6 +4,7 @@ import {
   parseCustomRules,
   rebuildAll,
   reconcileAlarms,
+  runListOperation,
 } from "./lists.js";
 import { DEFAULT_SETTINGS, getState, removeRawList } from "./storage.js";
 import { extensionApi as ext } from "../extension_api.js";
@@ -61,7 +62,11 @@ export function parseSettingsImport(text) {
   return { settings, lists, rawLists: {}, customRules };
 }
 
-export async function importSettingsBackup(text) {
+export function importSettingsBackup(text) {
+  return runListOperation(() => doImportSettingsBackup(text));
+}
+
+async function doImportSettingsBackup(text) {
   const existing = await getState({ includeRawLists: false });
   const imported = parseSettingsImport(text);
   const rawListIdsToClear = new Set([

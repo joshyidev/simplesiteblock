@@ -83,6 +83,18 @@ export async function saveLists(lists) {
   return lists;
 }
 
+export async function saveListsWithRawList(
+  lists,
+  { listId, text, pendingRebuild },
+) {
+  const patch = { lists, pendingRebuild: Boolean(pendingRebuild) };
+  if (typeof text === "string") {
+    patch[rawListStorageKey(listId)] = text;
+  }
+  await ext.storage.local.set(patch);
+  return lists;
+}
+
 export function rawListStorageKey(listId) {
   return `${RAW_LIST_PREFIX}${listId}`;
 }

@@ -202,31 +202,144 @@ function makeChromeMock({
   return result;
 }
 
-test("addList saves list metadata and marks pending without fetching", async () => {
+test("addList fetches, validates, caches, and counts only the new list", async () => {
   const originalChrome = globalThis.chrome;
   const originalFetch = globalThis.fetch;
-  const { chrome, written } = makeChromeMock();
-  globalThis.chrome = chrome;
-  globalThis.fetch = async () => {
-    throw new Error("addList should not fetch");
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "existing",
+        name: "Existing",
+        url: "https://example.com/existing.txt",
+        format: "auto",
+        enabled: true,
+        lastError: null,
+        etag: null,
+        lastModified: null,
+        ruleCount: 1,
+      },
+    ],
+    rawLists: { existing: "existing.example" },
+    dynamicRules: [{ id: 1 }],
+  });
+  globalThis.chrome = mock.chrome;
+  const requests = [];
+  const body = [
+    "||ads.example^",
+    "||ads.example^",
+    "@@||safe.example^",
+    "/unsupported/",
+  ].join("\n");
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    return new Response(body, {
+      headers: {
+        ETag: '"fresh"',
+        "Last-Modified": "Thu, 02 Jan 2025 00:00:00 GMT",
+        "Content-Type": "text/plain",
+      },
+    });
   };
 
   try {
-    await addList({ name: "Test", url: "https://example.com/list.txt" });
-    const indexWrite = written.find((w) => "compiledIndex" in w);
+    const result = await addList({
+      name: "Test",
+      url: "https://example.com/list.txt",
+    });
+    const added = mock.store.lists.find((list) => list.id === result.listId);
+    assert.deepEqual(requests, ["https://example.com/list.txt"]);
+    assert.equal(result.ruleCount, 2);
+    assert.equal(result.error, null);
+    assert.equal(added.name, "Test");
+    assert.equal(added.ruleCount, 2);
+    assert.equal(added.lastError, null);
+    assert.equal(added.etag, '"fresh"');
+    assert.equal(added.lastModified, "Thu, 02 Jan 2025 00:00:00 GMT");
+    assert.equal(mock.store[rawListStorageKey(added.id)], body);
+    assert.equal(mock.store[rawListStorageKey("existing")], "existing.example");
+    assert.equal(mock.store.pendingRebuild, true);
+    assert.deepEqual(mock.dnrUpdates, [], "adding must not apply DNR rules");
+    assert.deepEqual(mock.getRules(), [{ id: 1 }]);
+    const indexWrite = mock.written.find((w) => "compiledIndex" in w);
     assert.equal(
       indexWrite,
       undefined,
-      "compiledIndex should not be recompiled on add",
+      "compiledIndex should not be written on add",
     );
-    const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should be set");
-    assert.equal(pendingWrite.pendingRebuild, true);
-    const listWrite = written.find((w) => "lists" in w);
-    assert.ok(listWrite, "lists should have been saved");
-    assert.equal(listWrite.lists.length, 1);
-    assert.equal(listWrite.lists[0].url, "https://example.com/list.txt");
-    assert.equal(listWrite.lists[0].name, "Test");
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("addList caches an invalid download so Update All can clear pending", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  globalThis.chrome = mock.chrome;
+  const body = "Welcome to this website\nPrivacy Policy\nSearch";
+  let fetchCalls = 0;
+  globalThis.fetch = async (_url, options) => {
+    fetchCalls += 1;
+    if (fetchCalls === 2) {
+      assert.equal(options.headers["If-None-Match"], '"invalid"');
+    }
+    return new Response(body, {
+      headers: {
+        ETag: '"invalid"',
+        "Content-Type": "text/plain",
+      },
+    });
+  };
+
+  try {
+    const result = await addList({
+      name: "Broken",
+      url: "https://example.com/not-a-list.txt",
+    });
+    const added = mock.store.lists[0];
+    assert.equal(result.listId, added.id);
+    assert.equal(result.ruleCount, null);
+    assert.match(result.error, /valid hosts or Adblock/);
+    assert.equal(added.ruleCount, 0);
+    assert.match(added.lastError, /valid hosts or Adblock/);
+    assert.equal(added.etag, '"invalid"');
+    assert.equal(mock.store[rawListStorageKey(added.id)], body);
+    assert.equal(mock.store.pendingRebuild, true);
+    assert.deepEqual(mock.dnrUpdates, []);
+
+    await updateAllLists();
+    assert.equal(mock.store[rawListStorageKey(added.id)], body);
+    assert.match(mock.store.lists[0].lastError, /valid hosts or Adblock/);
+    assert.equal(mock.store.pendingRebuild, false);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("addList keeps a network failure pending without a cached body", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  globalThis.chrome = mock.chrome;
+  globalThis.fetch = async () => {
+    throw new Error("Network unavailable");
+  };
+
+  try {
+    const result = await addList({
+      name: "Offline",
+      url: "https://example.com/offline.txt",
+    });
+    const added = mock.store.lists[0];
+    assert.equal(result.listId, added.id);
+    assert.equal(result.ruleCount, null);
+    assert.equal(result.error, "Network unavailable");
+    assert.equal(added.lastError, "Network unavailable");
+    assert.equal(rawListStorageKey(added.id) in mock.store, false);
+    assert.equal(mock.store.pendingRebuild, true);
+    assert.deepEqual(mock.dnrUpdates, []);
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
@@ -462,6 +575,130 @@ test("concurrent updateAllLists calls share one in-flight update", async () => {
     resolveFetch();
     await Promise.all([first, second]);
     assert.equal(fetchCalls, 1);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("addList waits for Update All without being lost to its snapshot", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "existing",
+        name: "Existing",
+        url: "https://example.com/existing.txt",
+        format: "auto",
+        enabled: true,
+        lastError: null,
+        etag: null,
+        lastModified: null,
+        ruleCount: 1,
+      },
+    ],
+    rawLists: { existing: "existing.example" },
+  });
+  let releaseUpdate;
+  let markUpdateStarted;
+  const updateReleased = new Promise((resolve) => {
+    releaseUpdate = resolve;
+  });
+  const updateStarted = new Promise((resolve) => {
+    markUpdateStarted = resolve;
+  });
+  const requests = [];
+
+  globalThis.chrome = chrome;
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    if (url.endsWith("/existing.txt")) {
+      markUpdateStarted();
+      await updateReleased;
+      return new Response("existing.example", {
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+    return new Response("new.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const update = updateAllLists();
+    await updateStarted;
+    const add = addList({
+      name: "New",
+      url: "https://example.com/new.txt",
+    });
+    await Promise.resolve();
+    assert.deepEqual(requests, ["https://example.com/existing.txt"]);
+
+    releaseUpdate();
+    const [, result] = await Promise.all([update, add]);
+    assert.equal(result.ruleCount, 1);
+    assert.deepEqual(
+      store.lists.map((list) => list.name),
+      ["Existing", "New"],
+    );
+    assert.equal(store[rawListStorageKey("existing")], "existing.example");
+    assert.equal(
+      store[rawListStorageKey(result.listId)],
+      "new.example",
+    );
+    assert.equal(store.pendingRebuild, true);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("removeList waits for Update All and removes its cached body", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const { chrome, store } = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        format: "auto",
+        enabled: true,
+        lastError: null,
+        etag: null,
+        lastModified: null,
+        ruleCount: 0,
+      },
+    ],
+  });
+  let releaseFetch;
+  let markFetchStarted;
+  const fetchReleased = new Promise((resolve) => {
+    releaseFetch = resolve;
+  });
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve;
+  });
+
+  globalThis.chrome = chrome;
+  globalThis.fetch = async () => {
+    markFetchStarted();
+    await fetchReleased;
+    return new Response("blocked.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const update = updateAllLists();
+    await fetchStarted;
+    const removal = removeList("abc");
+    releaseFetch();
+    await Promise.all([update, removal]);
+
+    assert.deepEqual(store.lists, []);
+    assert.equal(rawListStorageKey("abc") in store, false);
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;

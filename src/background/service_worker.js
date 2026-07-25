@@ -4,11 +4,16 @@ import { lookupHost } from "./lookup.js";
 import { registerNavigationGuard } from "./navigation_guard.js";
 import { ensureDefaults } from "./storage.js";
 import {
+  addList,
   handleAlarm,
   reconcileAlarms,
   reconcileRules,
+  removeList,
+  runListOperation,
   updateAllLists,
   updateCustomRules,
+  updateListIdentity,
+  updateListSettings,
 } from "./lists.js";
 
 ext.alarms.onAlarm.addListener((alarm) => {
@@ -16,6 +21,38 @@ ext.alarms.onAlarm.addListener((alarm) => {
 });
 
 ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "ssb:add-list") {
+    void respondWithCommand(
+      () => addList({ name: message.name, url: message.url }),
+      sendResponse,
+    );
+    return true;
+  }
+  if (message?.type === "ssb:remove-list") {
+    void respondWithCommand(() => removeList(message.listId), sendResponse);
+    return true;
+  }
+  if (message?.type === "ssb:update-list-identity") {
+    void respondWithCommand(
+      () =>
+        updateListIdentity(message.listId, {
+          name: message.name,
+          url: message.url,
+        }),
+      sendResponse,
+    );
+    return true;
+  }
+  if (message?.type === "ssb:update-list-enabled") {
+    void respondWithCommand(
+      () =>
+        updateListSettings(message.listId, {
+          enabled: message.enabled === true,
+        }),
+      sendResponse,
+    );
+    return true;
+  }
   if (message?.type === "ssb:update-all-lists") {
     void respondWithCommand(() => updateAllLists(), sendResponse);
     return true;
@@ -55,10 +92,10 @@ registerNavigationGuard();
 // reload (orphans inherited from a prior install) or a browser restart (rules
 // that vanished). Both are covered here. Plain navigation/message wakes skip it.
 ext.runtime.onInstalled.addListener(() => {
-  void reconcileRules();
+  void runListOperation(reconcileRules);
 });
 ext.runtime.onStartup.addListener(() => {
-  void reconcileRules();
+  void runListOperation(reconcileRules);
 });
 
 void initialize();
@@ -66,14 +103,14 @@ void initialize();
 // Runs on every worker wake. Kept cheap: small storage reads only, no
 // getDynamicRules. Reconciliation of applied rules is install/startup-scoped above.
 async function initialize() {
-  await ensureDefaults();
+  await runListOperation(ensureDefaults);
   await reconcileAlarms();
 }
 
 async function respondWithCommand(command, sendResponse) {
   try {
-    await command();
-    sendResponse({ ok: true });
+    const result = await command();
+    sendResponse(result === undefined ? { ok: true } : { ok: true, result });
   } catch (error) {
     sendResponse({
       ok: false,
