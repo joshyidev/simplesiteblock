@@ -647,10 +647,6 @@ td:nth-child(6) {
   text-align: right;
 }
 
-.list-summary-item {
-  min-width: 0;
-}
-
 .list-controls {
   margin-bottom: 0;
   justify-content: flex-start;
@@ -788,50 +784,13 @@ td:nth-child(6) {
   min-width: 100px;
 }
 
-.pending-notice {
-  max-height: 0;
-  margin: 0;
-  overflow: hidden;
-  padding: 0 12px;
-  border-left: 3px solid var(--accent);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.build-error-notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   color: var(--text);
   font-size: 13px;
-  opacity: 0;
-  transform: translateY(-4px);
-  transition:
-    max-height 180ms ease,
-    margin-bottom 180ms ease,
-    padding-top 180ms ease,
-    padding-bottom 180ms ease,
-    opacity 160ms ease,
-    transform 180ms ease;
-}
-
-.pending-notice.is-visible {
-  max-height: 96px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-@starting-style {
-  .pending-notice.is-visible.is-entering {
-    max-height: 0;
-    margin-bottom: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pending-notice {
-    transition: none;
-  }
 }
 
 .muted {

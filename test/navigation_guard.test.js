@@ -11,11 +11,11 @@ function makeChrome({
   listAllow = [],
   customBlock = [],
   customAllow = [],
-  rulesBuiltAt = 1,
+  guardCacheVersion = 1,
 } = {}) {
   const tabUpdates = [];
   const store = {
-    rulesBuiltAt,
+    guardCacheVersion,
     guardHostsList: { block: listBlock, allow: listAllow },
     guardHostsCustom: { block: customBlock, allow: customAllow },
   };
@@ -54,7 +54,7 @@ async function withChrome(mock, fn) {
 }
 
 test("guardNavigation redirects a blocked top-level navigation to the block page", async () => {
-  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 11 });
+  const mock = makeChrome({ listBlock: ["example.com"], guardCacheVersion: 11 });
   await withChrome(mock, async () => {
     await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 5 });
     assert.deepEqual(mock.tabUpdates, [
@@ -67,7 +67,7 @@ test("guardNavigation redirects a blocked top-level navigation to the block page
 });
 
 test("guardNavigation blocks subdomains of a listed host", async () => {
-  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 14 });
+  const mock = makeChrome({ listBlock: ["example.com"], guardCacheVersion: 14 });
   await withChrome(mock, async () => {
     await guardNavigation({
       frameId: 0,
@@ -82,7 +82,7 @@ test("guardNavigation honors a list allow exception", async () => {
   const mock = makeChrome({
     listBlock: ["example.com"],
     listAllow: ["safe.example.com"],
-    rulesBuiltAt: 12,
+    guardCacheVersion: 12,
   });
   await withChrome(mock, async () => {
     await guardNavigation({
@@ -98,7 +98,7 @@ test("guardNavigation lets a custom block override a list allow", async () => {
   const mock = makeChrome({
     listAllow: ["example.com"],
     customBlock: ["example.com"],
-    rulesBuiltAt: 15,
+    guardCacheVersion: 15,
   });
   await withChrome(mock, async () => {
     await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 2 });
@@ -110,7 +110,7 @@ test("guardNavigation lets a custom allow override a list block", async () => {
   const mock = makeChrome({
     listBlock: ["example.com"],
     customAllow: ["example.com"],
-    rulesBuiltAt: 16,
+    guardCacheVersion: 16,
   });
   await withChrome(mock, async () => {
     await guardNavigation({ frameId: 0, url: "https://example.com/", tabId: 2 });
@@ -119,7 +119,7 @@ test("guardNavigation lets a custom allow override a list block", async () => {
 });
 
 test("guardNavigation does nothing when no host matches", async () => {
-  const mock = makeChrome({ listBlock: ["example.com"], rulesBuiltAt: 13 });
+  const mock = makeChrome({ listBlock: ["example.com"], guardCacheVersion: 13 });
   await withChrome(mock, async () => {
     await guardNavigation({
       frameId: 0,

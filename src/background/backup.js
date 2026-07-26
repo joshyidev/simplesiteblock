@@ -83,9 +83,13 @@ async function doImportSettingsBackup(text) {
     customRules: imported.customRules,
     lastListUpdateAttemptAt: 0,
     lastListUpdateCompletedAt: 0,
+    // The errors described the replaced configuration; rebuildAll below decides
+    // whether the imported one has a problem of its own.
+    lastListBuildError: null,
+    lastCustomBuildError: null,
   });
-  // Imported lists arrive without cached bodies; rebuildAll applies custom rules
-  // now and flags pendingRebuild until the lists are fetched.
+  // Imported lists arrive without cached bodies, so rebuildAll applies the custom
+  // rules now and an empty list slice; the lists start blocking once fetched.
   await rebuildAll();
   await reconcileAlarms();
 }

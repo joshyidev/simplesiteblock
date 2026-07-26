@@ -3,7 +3,7 @@ import { getGuardHosts } from "./storage.js";
 
 const BLOCK_PAGE_PATH = "/src/blocked/blocked.html";
 
-let matcherCache = { builtAt: null, matcher: null };
+let matcherCache = { version: null, matcher: null };
 
 export function registerNavigationGuard() {
   if (!ext.webNavigation) return;
@@ -42,11 +42,15 @@ function hostnameOf(url) {
   return host.endsWith(".") ? host.slice(0, -1) : host;
 }
 
+// guardCacheVersion is a token replaced on every applied rule slice, so an
+// inequality check is all that is needed to know the host sets moved on.
 async function getMatcher() {
-  const { rulesBuiltAt } = await ext.storage.local.get({ rulesBuiltAt: 0 });
-  if (matcherCache.builtAt !== rulesBuiltAt) {
+  const { guardCacheVersion } = await ext.storage.local.get({
+    guardCacheVersion: "",
+  });
+  if (matcherCache.version !== guardCacheVersion) {
     const hosts = await getGuardHosts();
-    matcherCache = { builtAt: rulesBuiltAt, matcher: buildMatcher(hosts) };
+    matcherCache = { version: guardCacheVersion, matcher: buildMatcher(hosts) };
   }
   return matcherCache.matcher;
 }

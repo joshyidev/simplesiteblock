@@ -8,7 +8,6 @@ import {
   parseCustomRules,
   parseListText,
   rebuildListRules,
-  recomputePending,
   reconcileAlarms,
   reconcileRules,
   removeList,
@@ -145,7 +144,6 @@ function makeChromeMock({
     lists,
     rawLists,
     customRules,
-    pendingRebuild: false,
   };
   for (const [listId, text] of Object.entries(rawLists)) {
     store[rawListStorageKey(listId)] = text;
@@ -261,9 +259,18 @@ test("addList fetches, validates, caches, and counts only the new list", async (
     assert.equal(added.lastModified, "Thu, 02 Jan 2025 00:00:00 GMT");
     assert.equal(mock.store[rawListStorageKey(added.id)], body);
     assert.equal(mock.store[rawListStorageKey("existing")], "existing.example");
-    assert.equal(mock.store.pendingRebuild, true);
-    assert.deepEqual(mock.dnrUpdates, [], "adding must not apply DNR rules");
-    assert.deepEqual(mock.getRules(), [{ id: 1 }]);
+    // Adding applies the list slice immediately, so the new list blocks now and
+    // the pre-existing dynamic rule in the slice's range is replaced.
+    assert.equal(mock.dnrUpdates.length, 1);
+    assert.deepEqual(mock.dnrUpdates[0].removeRuleIds, [1]);
+    const applied = mock
+      .getRules()
+      .flatMap((rule) => rule.condition.requestDomains);
+    assert.deepEqual(applied.sort(), [
+      "ads.example",
+      "existing.example",
+      "safe.example",
+    ]);
     const indexWrite = mock.written.find((w) => "compiledIndex" in w);
     assert.equal(
       indexWrite,
@@ -276,18 +283,15 @@ test("addList fetches, validates, caches, and counts only the new list", async (
   }
 });
 
-test("addList caches an invalid download so Update All can clear pending", async () => {
+test("addList rejects an invalid download instead of caching it", async () => {
   const originalChrome = globalThis.chrome;
   const originalFetch = globalThis.fetch;
   const mock = makeChromeMock({ dynamicRules: [] });
   globalThis.chrome = mock.chrome;
   const body = "Welcome to this website\nPrivacy Policy\nSearch";
-  let fetchCalls = 0;
+  const sentHeaders = [];
   globalThis.fetch = async (_url, options) => {
-    fetchCalls += 1;
-    if (fetchCalls === 2) {
-      assert.equal(options.headers["If-None-Match"], '"invalid"');
-    }
+    sentHeaders.push(options.headers);
     return new Response(body, {
       headers: {
         ETag: '"invalid"',
@@ -307,22 +311,78 @@ test("addList caches an invalid download so Update All can clear pending", async
     assert.match(result.error, /valid hosts or Adblock/);
     assert.equal(added.ruleCount, 0);
     assert.match(added.lastError, /valid hosts or Adblock/);
-    assert.equal(added.etag, '"invalid"');
-    assert.equal(mock.store[rawListStorageKey(added.id)], body);
-    assert.equal(mock.store.pendingRebuild, true);
-    assert.deepEqual(mock.dnrUpdates, []);
+    assert.equal(added.etag, null, "a rejected body must not store validators");
+    assert.equal(rawListStorageKey(added.id) in mock.store, false);
+    // The slice still applies — it just has nothing to contribute.
+    assert.equal(mock.store.appliedListDomainCount, 0);
 
     await updateAllLists();
-    assert.equal(mock.store[rawListStorageKey(added.id)], body);
+    // No cached body means no conditional request: the next fetch must be able
+    // to pick up a fixed list.
+    assert.equal(sentHeaders[1]["If-None-Match"], undefined);
+    assert.equal(rawListStorageKey(added.id) in mock.store, false);
     assert.match(mock.store.lists[0].lastError, /valid hosts or Adblock/);
-    assert.equal(mock.store.pendingRebuild, false);
+    assert.equal(mock.store.appliedListDomainCount, 0);
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
   }
 });
 
-test("addList keeps a network failure pending without a cached body", async () => {
+test("a list that starts serving junk keeps its last known-good body", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const goodBody = "0.0.0.0 ads.example\n0.0.0.0 tracker.example";
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Good list",
+        url: "https://example.com/list.txt",
+        format: "auto",
+        enabled: true,
+        lastError: null,
+        etag: '"good"',
+        lastModified: null,
+        ruleCount: 2,
+      },
+    ],
+    rawLists: { abc: goodBody },
+    dynamicRules: [],
+  });
+  globalThis.chrome = mock.chrome;
+  globalThis.fetch = async () =>
+    new Response("<!doctype html><html><body>Account suspended</body></html>", {
+      headers: { ETag: '"junk"', "Content-Type": "text/plain" },
+    });
+
+  try {
+    await updateAllLists();
+
+    const list = mock.store.lists[0];
+    assert.equal(
+      mock.store[rawListStorageKey("abc")],
+      goodBody,
+      "the junk download must not overwrite the cached body",
+    );
+    assert.match(list.lastError, /web page/);
+    assert.equal(list.etag, '"good"', "validators must still match the body");
+    assert.equal(list.ruleCount, 2);
+
+    // The rebuild still applies the good body, so blocking never lapses.
+    const domains = mock
+      .getRules()
+      .filter((rule) => rule.id < 1_000_000)
+      .flatMap((rule) => rule.condition.requestDomains);
+    assert.deepEqual(domains.sort(), ["ads.example", "tracker.example"]);
+    assert.equal(mock.store.appliedListDomainCount, 2);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("addList records a network failure and caches no body", async () => {
   const originalChrome = globalThis.chrome;
   const originalFetch = globalThis.fetch;
   const mock = makeChromeMock({ dynamicRules: [] });
@@ -342,8 +402,7 @@ test("addList keeps a network failure pending without a cached body", async () =
     assert.equal(result.error, "Network unavailable");
     assert.equal(added.lastError, "Network unavailable");
     assert.equal(rawListStorageKey(added.id) in mock.store, false);
-    assert.equal(mock.store.pendingRebuild, true);
-    assert.deepEqual(mock.dnrUpdates, []);
+    assert.equal(mock.store.appliedListDomainCount, 0);
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
@@ -387,15 +446,16 @@ test("updateListIdentity changes name without clearing cached list body", async 
       false,
     );
     assert.equal(
-      written.some((w) => "pendingRebuild" in w),
+      written.some((w) => "guardCacheVersion" in w),
       false,
+      "a name-only edit changes no rules, so it must not reapply the slice",
     );
   } finally {
     globalThis.chrome = originalChrome;
   }
 });
 
-test("updateListIdentity changes URL, clears cached body, and marks pending", async () => {
+test("updateListIdentity changes URL, clears cached body, and reapplies rules", async () => {
   const originalChrome = globalThis.chrome;
   const { chrome, removed, store, written } = makeChromeMock({
     lists: [
@@ -428,9 +488,11 @@ test("updateListIdentity changes URL, clears cached body, and marks pending", as
     assert.equal(store.lists[0].ruleCount, 0);
     assert.equal(rawListStorageKey("abc") in store, false);
     assert.deepEqual(removed, [rawListStorageKey("abc")]);
-    const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should be set");
-    assert.equal(pendingWrite.pendingRebuild, true);
+    // Repointing drops the old body, so the old domains stop blocking at once.
+    const sliceWrite = written.find((w) => "guardHostsList" in w);
+    assert.ok(sliceWrite, "the list slice should have been reapplied");
+    assert.deepEqual(sliceWrite.guardHostsList.block, []);
+    assert.equal(store.appliedListDomainCount, 0);
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -575,8 +637,160 @@ test("updateAllLists records a completed check when rule rebuilding fails", asyn
         mock.store.lastListUpdateAttemptAt,
       "fetch completion should survive a later rule-application failure",
     );
+    assert.equal(mock.store.lastListBuildError, "DNR update failed");
   } finally {
     globalThis.chrome = originalChrome;
+  }
+});
+
+test("an alarm-driven rule build failure is recorded, then cleared", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  let failApply = true;
+  const realUpdate = mock.chrome.declarativeNetRequest.updateDynamicRules;
+  mock.chrome.declarativeNetRequest.updateDynamicRules = async (patch) => {
+    if (failApply) throw new Error("DNR update failed");
+    return realUpdate(patch);
+  };
+  globalThis.chrome = mock.chrome;
+
+  try {
+    // handleAlarm swallows the error, so storage is the only channel left.
+    await handleAlarm({ name: "update:index" });
+    assert.equal(mock.store.lastListBuildError, "DNR update failed");
+
+    failApply = false;
+    await updateAllLists();
+    assert.equal(
+      mock.store.lastListBuildError,
+      null,
+      "a successful build must clear the recorded error",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconcileRules with nothing to rebuild keeps a standing build error", async () => {
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  mock.store.lastListBuildError = "Over the rule limit";
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+    assert.equal(
+      mock.store.lastListBuildError,
+      "Over the rule limit",
+      "a no-op reconcile must not clear an error it did not resolve",
+    );
+    assert.deepEqual(mock.dnrUpdates, []);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("reconciling one slice preserves a standing error on the other", async () => {
+  const originalChrome = globalThis.chrome;
+  // Orphaned custom rules with no backing text: reconciliation rebuilds the
+  // custom slice only, and must not touch the list slice's recorded failure.
+  const mock = makeChromeMock({
+    customRules: "",
+    dynamicRules: [{ id: 1_000_001 }],
+  });
+  mock.store.lastListBuildError = "Over the rule limit";
+  globalThis.chrome = mock.chrome;
+
+  try {
+    await reconcileRules();
+
+    assert.equal(
+      mock.store.lastCustomBuildError,
+      null,
+      "the rebuilt slice clears its own error",
+    );
+    assert.equal(
+      mock.store.lastListBuildError,
+      "Over the rule limit",
+      "the list slice was never retried, so its warning must survive",
+    );
+    assert.deepEqual(
+      mock.getRules(),
+      [],
+      "the orphaned custom rule should have been cleared",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("updateAllLists reports what each list actually did", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "fresh",
+        name: "Fresh",
+        url: "https://example.com/fresh.txt",
+        format: "auto",
+        enabled: true,
+        etag: null,
+        lastModified: null,
+        ruleCount: 0,
+      },
+      {
+        id: "cached",
+        name: "Cached",
+        url: "https://example.com/cached.txt",
+        format: "auto",
+        enabled: true,
+        etag: '"cached"',
+        lastModified: null,
+        ruleCount: 1,
+      },
+      {
+        id: "broken",
+        name: "Broken",
+        url: "https://example.com/broken.txt",
+        format: "auto",
+        enabled: true,
+        etag: null,
+        lastModified: null,
+        ruleCount: 0,
+      },
+      {
+        id: "off",
+        name: "Disabled",
+        url: "https://example.com/off.txt",
+        format: "auto",
+        enabled: false,
+      },
+    ],
+    rawLists: { cached: "0.0.0.0 cached.example" },
+    dynamicRules: [],
+  });
+  globalThis.chrome = mock.chrome;
+  globalThis.fetch = async (url) => {
+    if (url.includes("broken")) throw new Error("Network unavailable");
+    if (url.includes("cached")) return new Response(null, { status: 304 });
+    return new Response("0.0.0.0 fresh.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  };
+
+  try {
+    const summary = await updateAllLists();
+    assert.deepEqual(summary, {
+      checked: 3,
+      updated: 1,
+      unchanged: 1,
+      failed: 1,
+    });
+    assert.equal(mock.store.lastListBuildError, null);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -693,7 +907,11 @@ test("addList waits for Update All without being lost to its snapshot", async ()
       store[rawListStorageKey(result.listId)],
       "new.example",
     );
-    assert.equal(store.pendingRebuild, true);
+    assert.equal(
+      store.appliedListDomainCount,
+      2,
+      "both the updated and the newly added list end up applied",
+    );
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;
@@ -772,53 +990,23 @@ test("removeList removes the list and its raw content and marks pending", async 
     assert.ok(listWrite, "lists should have been saved");
     assert.equal(listWrite.lists.length, 0);
     assert.deepEqual(removed, [rawListStorageKey("abc")]);
-    const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should have been set");
-    assert.equal(pendingWrite.pendingRebuild, true);
-    const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.equal(
-      indexWrite,
-      undefined,
-      "compiledIndex should not be recompiled immediately",
+    const sliceWrite = written.find((w) => "guardHostsList" in w);
+    assert.ok(sliceWrite, "removing a list must reapply the slice");
+    assert.deepEqual(
+      sliceWrite.guardHostsList.block,
+      [],
+      "a removed list stops blocking immediately",
     );
+    const indexWrite = written.find((w) => "compiledIndex" in w);
+    assert.equal(indexWrite, undefined, "compiledIndex is a v1 artifact");
   } finally {
     globalThis.chrome = originalChrome;
   }
 });
 
-test("updateListSettings with enabled change marks pending without recompiling", async () => {
+test("disabling a list stops it blocking immediately", async () => {
   const originalChrome = globalThis.chrome;
-  const { chrome, written } = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/l.txt",
-        enabled: true,
-      },
-    ],
-  });
-  globalThis.chrome = chrome;
-
-  try {
-    await updateListSettings("abc", { enabled: false });
-    const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.ok(pendingWrite, "pendingRebuild should be set");
-    assert.equal(pendingWrite.pendingRebuild, true);
-    const indexWrite = written.find((w) => "compiledIndex" in w);
-    assert.equal(
-      indexWrite,
-      undefined,
-      "compiledIndex should not be recompiled",
-    );
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("toggling a list off then on cancels out and clears pending", async () => {
-  const originalChrome = globalThis.chrome;
-  const { chrome, store } = makeChromeMock({
+  const mock = makeChromeMock({
     lists: [
       {
         id: "abc",
@@ -829,23 +1017,34 @@ test("toggling a list off then on cancels out and clears pending", async () => {
       },
     ],
     rawLists: { abc: "0.0.0.0 ads.example.com" },
+    dynamicRules: [],
   });
+  const { chrome, store } = mock;
   globalThis.chrome = chrome;
+
+  const appliedDomains = () =>
+    mock.getRules().flatMap((rule) => rule.condition.requestDomains);
 
   try {
     // Establish the applied baseline: list enabled with a cached body.
     await rebuildListRules();
-    assert.equal(store.pendingRebuild, false);
+    assert.deepEqual(appliedDomains(), ["ads.example.com"]);
 
     await updateListSettings("abc", { enabled: false });
-    assert.equal(store.pendingRebuild, true, "disabling diverges from applied");
+    assert.deepEqual(
+      appliedDomains(),
+      [],
+      "a disabled list must stop blocking without waiting for Update All",
+    );
+    assert.equal(store.appliedListDomainCount, 0);
 
     await updateListSettings("abc", { enabled: true });
-    assert.equal(
-      store.pendingRebuild,
-      false,
-      "re-enabling returns to the applied signature",
+    assert.deepEqual(
+      appliedDomains(),
+      ["ads.example.com"],
+      "re-enabling restores blocking from the cached body",
     );
+    assert.equal(store.appliedListDomainCount, 1);
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -894,34 +1093,10 @@ test("updateCustomRules persists guard host sets for the navigation guard", asyn
   }
 });
 
-test("recomputePending stays pending when an enabled list lacks a body", async () => {
-  const originalChrome = globalThis.chrome;
-  const { chrome, store } = makeChromeMock({
-    lists: [
-      {
-        id: "abc",
-        name: "Test",
-        url: "https://example.com/l.txt",
-        format: "auto",
-        enabled: true,
-      },
-    ],
-  });
-  // Signature matches the enabled set, but no cached body exists yet.
-  store.appliedSignature = JSON.stringify(["abc|auto"]);
-  globalThis.chrome = chrome;
-
-  try {
-    await recomputePending();
-    assert.equal(store.pendingRebuild, true);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
 test("updateCustomRules validates and saves rules", async () => {
   const originalChrome = globalThis.chrome;
-  const { chrome, written } = makeChromeMock();
+  const { chrome, store, written } = makeChromeMock();
+  store.lastCustomBuildError = "Previous custom build failed";
   globalThis.chrome = chrome;
 
   try {
@@ -929,13 +1104,17 @@ test("updateCustomRules validates and saves rules", async () => {
     const rulesWrite = written.find((w) => "customRules" in w);
     assert.ok(rulesWrite, "customRules should have been saved");
     assert.equal(rulesWrite.customRules, "example.com\n||ads.example.net^");
-    // Custom rules apply to their own slice immediately and never touch list
-    // pending state.
-    const pendingWrite = written.find((w) => "pendingRebuild" in w);
-    assert.equal(pendingWrite, undefined, "custom rules do not set pending");
+    // Custom rules apply to their own slice and never touch the list slice.
+    const listWrite = written.find((w) => "guardHostsList" in w);
+    assert.equal(listWrite, undefined, "custom rules must not rebuild lists");
     const statsWrite = written.find((w) => "appliedCustomDomainCount" in w);
     assert.ok(statsWrite, "custom rule stats should be written");
     assert.equal(statsWrite.appliedCustomDomainCount, 2);
+    assert.equal(
+      store.lastCustomBuildError,
+      null,
+      "a successful custom build must clear its standing error",
+    );
     assert.equal(
       written.some(
         (write) =>
@@ -950,10 +1129,137 @@ test("updateCustomRules validates and saves rules", async () => {
   }
 });
 
+test("each applied slice commits its derived state in one write", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    customRules: "||custom.example^",
+    dynamicRules: [],
+  });
+  globalThis.chrome = mock.chrome;
+  globalThis.fetch = async () =>
+    new Response("0.0.0.0 ads.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+
+  try {
+    await updateAllLists();
+
+    // The guard's host sets must land in the same write as the cache version and
+    // the counts derived from them, so a worker death cannot separate them.
+    const listWrite = mock.written.find((write) => "guardHostsList" in write);
+    assert.deepEqual(Object.keys(listWrite).sort(), [
+      "appliedListDomainCount",
+      "appliedListRuleCount",
+      "guardCacheVersion",
+      "guardHostsList",
+    ]);
+    assert.deepEqual(listWrite.guardHostsList.block, ["ads.example"]);
+
+    const customWrite = mock.written.find(
+      (write) => "guardHostsCustom" in write,
+    );
+    assert.deepEqual(Object.keys(customWrite).sort(), [
+      "appliedCustomDomainCount",
+      "appliedCustomRuleCount",
+      "guardCacheVersion",
+      "guardHostsCustom",
+    ]);
+    assert.deepEqual(customWrite.guardHostsCustom.block, ["custom.example"]);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("each applied slice gets a fresh, independent guard cache version", async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const mock = makeChromeMock({
+    lists: [
+      {
+        id: "abc",
+        name: "Test",
+        url: "https://example.com/list.txt",
+        format: "auto",
+        enabled: true,
+      },
+    ],
+    customRules: "||custom.example^",
+    dynamicRules: [],
+  });
+  globalThis.chrome = mock.chrome;
+  globalThis.fetch = async () =>
+    new Response("0.0.0.0 ads.example", {
+      headers: { "Content-Type": "text/plain" },
+    });
+
+  try {
+    await updateAllLists();
+
+    // Both slices apply back to back. A wall-clock stamp could give them the
+    // same value, and a read-modify-write counter could collide with the
+    // incognito worker, which has its own queue over the same storage. Either
+    // way the guard would keep caching the first slice's hosts.
+    const versions = mock.written
+      .filter((write) => "guardCacheVersion" in write)
+      .map((write) => write.guardCacheVersion);
+    assert.equal(versions.length, 2);
+    assert.equal(
+      new Set(versions).size,
+      2,
+      "each applied slice needs a distinct cache version",
+    );
+    for (const version of versions) {
+      assert.equal(typeof version, "string");
+      assert.ok(version.length > 0);
+    }
+    assert.equal(mock.store.guardCacheVersion, versions[1]);
+
+    // Nothing derives the next version from the stored one, so two workers
+    // committing concurrently cannot land on the same token.
+    await rebuildListRules();
+    assert.equal(
+      versions.includes(mock.store.guardCacheVersion),
+      false,
+      "a later build must not reuse an earlier token",
+    );
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("assertListRedirectBudget throws past the unsafe-rule cap", () => {
-  assert.doesNotThrow(() => assertListRedirectBudget(0));
-  assert.doesNotThrow(() => assertListRedirectBudget(4000));
-  assert.throws(() => assertListRedirectBudget(10000), /rule limit/);
+  const originalChrome = globalThis.chrome;
+  const mock = makeChromeMock({ dynamicRules: [] });
+  globalThis.chrome = mock.chrome;
+
+  try {
+    // No cap declared by the runtime: falls back to 5,000 less the reserve.
+    assert.doesNotThrow(() => assertListRedirectBudget(0));
+    assert.doesNotThrow(() => assertListRedirectBudget(4000));
+    assert.throws(() => assertListRedirectBudget(10000), /rule limit/);
+
+    // A runtime that declares its own cap wins over the fallback.
+    mock.chrome.declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES = 100;
+    assert.doesNotThrow(() => assertListRedirectBudget(80));
+    assert.throws(() => assertListRedirectBudget(200), /rule limit/);
+
+    mock.chrome.declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES = 20000;
+    assert.doesNotThrow(() => assertListRedirectBudget(10000));
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
 });
 
 test("updateCustomRules rejects more than 1000 domains", async () => {
@@ -1342,9 +1648,10 @@ test("reconcileRules leaves a healthy applied state untouched", async () => {
     customRules: "keep.example",
     dynamicRules: [{ id: 2 }, { id: 1000000 }],
   });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
   mock.store.appliedListDomainCount = 1;
+  mock.store.appliedListRuleCount = 1;
   mock.store.appliedCustomDomainCount = 1;
+  mock.store.appliedCustomRuleCount = 1;
   globalThis.chrome = mock.chrome;
 
   try {
@@ -1355,10 +1662,10 @@ test("reconcileRules leaves a healthy applied state untouched", async () => {
   }
 });
 
-test("reconcileRules does not disturb a pending list edit", async () => {
+test("reconcileRules clears list rules left by a config that now enables none", async () => {
   const originalChrome = globalThis.chrome;
-  // A disabled list whose rules were applied while it was enabled: this is the
-  // documented CRUD gap (it keeps blocking until Update All), not orphan drift.
+  // A disabled list with rules still applied can no longer happen through normal
+  // operation — disabling reapplies the slice — so treat it as orphan drift.
   const mock = makeChromeMock({
     lists: [
       {
@@ -1371,17 +1678,11 @@ test("reconcileRules does not disturb a pending list edit", async () => {
     ],
     dynamicRules: [{ id: 2 }],
   });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
-  mock.store.appliedListDomainCount = 1;
   globalThis.chrome = mock.chrome;
 
   try {
     await reconcileRules();
-    assert.equal(
-      mock.dnrUpdates.length,
-      0,
-      "a pending edit must wait for Update All, not be reapplied on startup",
-    );
+    assert.deepEqual(mock.getRules(), [], "stale list rules must be cleared");
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -1402,7 +1703,6 @@ test("reconcileRules restores list rules that vanished though some were applied"
     rawLists: { abc: "0.0.0.0 ads.example.com" },
     dynamicRules: [],
   });
-  mock.store.appliedSignature = JSON.stringify(["abc|auto"]);
   mock.store.appliedListRuleCount = 1;
   globalThis.chrome = mock.chrome;
 

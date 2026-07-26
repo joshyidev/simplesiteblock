@@ -25,7 +25,9 @@ a blocked host embedded as an iframe/script in another page is not blocked; this
 is a site blocker, not a subresource/ad blocker. Note `redirect` is an "unsafe"
 DNR action, capped at 5,000 dynamic rules — at ~1,000 domains packed per rule
 that bounds blockable domains at ~5 million (`assertListRedirectBudget` guards
-it).
+it, reading the cap from
+`declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES` with a 5,000 fallback).
+Only `redirect` is unsafe; `allow` rules are safe and do not count against it.
 
 Rules are applied as **two independent slices** with disjoint dynamic-rule ID
 ranges (see `lists.js`):
@@ -43,14 +45,17 @@ import. `applyRuleSlice` removes a slice by its actual ID range (queried via
 use a higher priority band so they win over lists — e.g. a custom block entry
 overrides a list's allow. Allow still beats redirect within each band.
 
-Known gap: list CRUD (add/remove/enable/disable/edit) only sets `pendingRebuild`
-and does **not** reapply the list slice immediately — changes take effect on the
-next Update All. So a removed or disabled list keeps blocking until then.
-`pendingRebuild` is recomputed against `appliedSignature` (a fingerprint of the
-enabled lists), so a net-zero edit (disable then re-enable) clears it; it stays
-set when an enabled list has no cached body yet. Custom rules apply immediately
-to their own slice and never affect `pendingRebuild`. List CRUD also does not
-change the automatic-update cadence.
+List CRUD (add/remove/enable/disable/URL edit) reapplies the list slice
+immediately via `applyListRules()`, so a removed or disabled list stops blocking
+at once and what is applied always matches the current configuration. There is no
+pending/deferred state: no `pendingRebuild`, no `appliedSignature`, no "run Update
+lists to apply" notice. A list with no cached body simply contributes nothing
+until a fetch gives it one. Name-only edits change no rules and deliberately do
+not rebuild. The trade is that every toggle reparses all cached bodies; on a
+handful of lists that is well under a second, and it removes a whole class of
+"applied rules disagree with the config" bugs. Do not reintroduce a deferred
+rebuild — it was removed on purpose. List CRUD still does not change the
+automatic-update cadence.
 
 Automatic list updates are anchored to the persisted
 `lastListUpdateAttemptAt`, not to when Chrome happens to create or restore the
@@ -59,7 +64,8 @@ last attempt is overdue (or absent after install/upgrade), reconciliation keeps
 an already-pending alarm or schedules a prompt update. Update All records the
 attempt before fetching and `lastListUpdateCompletedAt` after all list fetches
 settle, before rebuilding DNR. The options UI reports this as "Lists checked";
-`rulesBuiltAt` remains an internal navigation-guard cache version. `handleAlarm`
+`guardCacheVersion` is an internal navigation-guard cache key, not a time at all.
+`handleAlarm`
 re-records the attempt if a run failed before getting that far, so a broken
 update costs one period instead of leaving the schedule permanently overdue —
 which would re-arm the alarm at the minimum delay on every worker wake and
@@ -69,14 +75,14 @@ Startup reconciliation: dynamic rules persist in the browser keyed to the
 extension ID, so they can outlive the storage that produced them (an unpacked
 reload reuses the path-derived ID; a reset wipes storage but leaves the rule
 store). `reconcileRules()` clears **orphaned** rules — list rules present when
-`appliedSignature` is empty (rebuildListRules never ran in this storage), or
+`appliedListRuleCount` is 0 (no list build ever committed in this storage), or
 custom rules with no backing text — and restores rules that vanished though some
 were last applied (`appliedListRuleCount`/`appliedCustomRuleCount` > 0 but the
-slice is empty). The rule count, not the block-domain count, is the restore signal
-so an allow-only slice — which applies DNR rules but blocks 0 domains — is still
-restored. It deliberately does **not** reapply a pending edit: a non-empty
-`appliedSignature` that merely diverges from current config is the documented CRUD
-gap above, left for the next Update All, not orphan drift. It runs on
+slice is empty). The rule count, not the block-domain count, is the signal on both
+sides, so an allow-only slice — which applies DNR rules but blocks 0 domains — is
+still restored. Because every list edit reapplies the slice, applied rules cannot
+drift from the configuration by any route other than these two, which is why the
+count alone is sufficient. It runs on
 `runtime.onInstalled` and `runtime.onStartup` only — **not** on every worker wake
 — because applied rules only drift across an install/reload or a browser restart,
 and it reads the full ruleset via `getDynamicRules` (kept off the hot path). The
@@ -100,13 +106,24 @@ is only available to **unpacked** extensions, so it throws on a Web Store instal
 and the guard would silently never fire (the bug that made the Brave backstop fail
 in production). Instead the guard maintains its own host
 matcher: each rebuild persists the same normalized block/allow host sets that
-produced the DNR rules (`saveGuardHosts` per slice in `lists.js`; storage keys
-`guardHostsList`/`guardHostsCustom`), and the guard subtree-matches the navigation
-host against them. This means the lists ARE duplicated in storage (DNR is still the
-applied source of truth; the host sets are a parallel cache kept in sync on every
-rebuild, including reconciliation and import). The matcher is held in memory keyed
-by `rulesBuiltAt`, so a non-blocked navigation costs one cheap storage read at most
-and the host sets reload only when the rules change. Precedence mirrors the DNR
+produced the DNR rules (storage keys `guardHostsList`/`guardHostsCustom`), and the
+guard subtree-matches the navigation host against them. This means the lists ARE
+duplicated in storage (DNR is still the applied source of truth; the host sets are
+a parallel cache kept in sync on every rebuild, including reconciliation and
+import). Each slice commits its host sets, counts, and cache version in a **single**
+storage write (`saveAppliedListSlice`/`saveAppliedCustomSlice`) so a worker death
+mid-rebuild cannot leave the guard matching hosts the applied rules no longer
+contain. The matcher is held in memory keyed by `guardCacheVersion`, so a
+non-blocked navigation costs one cheap storage read at most and the host sets
+reload only when the rules change. `guardCacheVersion` is a **fresh
+`crypto.randomUUID()` per commit** — never a timestamp, and never derived from the
+stored value. Two slices apply back to back so wall-clock stamps can collide in a
+millisecond, and `incognito: "split"` gives the regular and incognito workers
+separate in-memory `runListOperation` queues over one shared `storage.local`, so a
+read-modify-write counter can hand two concurrent commits the same value. Either
+collision leaves the guard holding a matcher it believes is current while a
+slice's hosts are missing from it. Only inequality is ever tested, so uniqueness
+is the entire contract — do not reintroduce ordering. Precedence mirrors the DNR
 priority bands: custom allow > custom block > list allow > list block, so `@@`
 allow exceptions and custom-over-list overrides resolve identically to DNR.
 
@@ -184,22 +201,34 @@ Load the Chrome extension manually:
 - Prefer small, direct ES module changes. Keep code browser-native.
 - Use extension local storage through `src/background/storage.js` helpers.
 - Parser code should remain pure where practical and covered by `node --test`.
-- `pendingRebuild` means list metadata/raw-list changes are not yet reflected in
-  active blocking rules. `rebuildRules()` clears it (see Status for what triggers
-  a rebuild and the CRUD gap).
-- Adding, removing, enabling/disabling, reformatting, or editing a list's URL
-  sets `pendingRebuild`. URL edits must also clear cached raw text and
-  validators (etag/last-modified) for that list.
-- Name-only list edits should not clear cached raw text or set `pendingRebuild`.
+- Adding, removing, enabling/disabling, or editing a list's URL reapplies the list
+  slice through `applyListRules()` before the operation returns. URL edits must
+  also clear cached raw text and validators (etag/last-modified) for that list.
+- Name-only list edits should not clear cached raw text or reapply any slice.
 - The global list update alarm is named `update:index` and is anchored to
   `lastListUpdateAttemptAt`. Be careful when changing alarm names because old
   extension installs may have persisted alarms. List CRUD deliberately does not
   re-anchor it; manual and automatic Update All attempts do.
 - List fetches reject obvious HTML and enforce response size limits.
-- Settings exports intentionally omit derived/cache data such as `pendingRebuild`,
-  `lastListUpdateAttemptAt`, `lastListUpdateCompletedAt`, raw list bodies, and
-  the navigation guard's `guardHostsList`/`guardHostsCustom` sets (rebuilt on
-  import). Imports reset the two update timestamps and must still reject a
+- Downloads are validated before they are cached: a body that fails to parse
+  rejects like a network failure, so the last known-good cached body (and its
+  etag/last-modified/ruleCount) survives and keeps blocking. A list URL that
+  starts serving an error page must not silently stop blocking. Only store a
+  raw body and its validators together, from the same successful parse.
+- `updateAllLists()` returns `{ checked, updated, unchanged, failed }`, counted
+  from the outcomes actually merged, and the options page renders that instead of
+  claiming every list updated. A rule build that fails outside a UI (the alarm,
+  startup reconciliation) records the error, which the lists tab shows. Errors are
+  tracked **per slice** (`lastListBuildError`/`lastCustomBuildError`) and only the
+  slice that rebuilt clears its own: reconciliation frequently rebuilds one slice
+  and not the other, and a successful custom build must not erase the only warning
+  that the current list data was never applied.
+- Settings exports intentionally omit derived/cache data such as the applied
+  counts, `lastListUpdateAttemptAt`, `lastListUpdateCompletedAt`, the two
+  build-error keys, raw list bodies, and the navigation guard's
+  `guardHostsList`/`guardHostsCustom` sets (rebuilt on import). Imports reset the
+  two update timestamps and both build errors (they described the replaced
+  config), and must still reject a
   `compiledIndex` field for backward compatibility with v1 exports.
 - The password lock is a personal accountability gate on the options page, not a
   security boundary. Passwords are stored as plaintext settings when enabled.
@@ -233,8 +262,8 @@ Load the Chrome extension manually:
 - Does the change affect what URLs are blocked or allowed?
 - Does the parser still skip unsupported regex/path/wildcard rules cleanly?
 - Does a storage/import change preserve the intended settings shape?
-- Does a list enable/disable/remove/update/edit path leave `pendingRebuild`,
-  cached raw list text, and the UI in a consistent state?
+- Does a list enable/disable/remove/update/edit path reapply the list slice and
+  leave cached raw list text and the UI in a consistent state?
 - Do alarms avoid duplicate or stale schedules after upgrades?
 - Are parser changes covered by tests for valid, invalid, and skipped input?
 - Are extension permission changes reflected in `manifest/chrome.json` and

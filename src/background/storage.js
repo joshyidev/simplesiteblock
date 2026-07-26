@@ -35,15 +35,15 @@ export async function getState({ includeRawLists = false } = {}) {
     settings: DEFAULT_SETTINGS,
     lists: [],
     customRules: "",
-    pendingRebuild: false,
-    rulesBuiltAt: 0,
+    guardCacheVersion: "",
     lastListUpdateAttemptAt: 0,
     lastListUpdateCompletedAt: 0,
-    appliedSignature: "",
     appliedListDomainCount: 0,
     appliedCustomDomainCount: 0,
     appliedListRuleCount: 0,
     appliedCustomRuleCount: 0,
+    lastListBuildError: null,
+    lastCustomBuildError: null,
   };
   // Cached raw list bodies are stored per-list; callers should use getRawList()
   // instead of loading every body at once.
@@ -60,19 +60,23 @@ export async function getState({ includeRawLists = false } = {}) {
         : {},
     customRules:
       typeof stored.customRules === "string" ? stored.customRules : "",
-    pendingRebuild: Boolean(stored.pendingRebuild),
-    rulesBuiltAt: Number(stored.rulesBuiltAt) || 0,
+    guardCacheVersion:
+      typeof stored.guardCacheVersion === "string"
+        ? stored.guardCacheVersion
+        : "",
     lastListUpdateAttemptAt: Number(stored.lastListUpdateAttemptAt) || 0,
     lastListUpdateCompletedAt: Number(stored.lastListUpdateCompletedAt) || 0,
-    appliedSignature:
-      typeof stored.appliedSignature === "string"
-        ? stored.appliedSignature
-        : "",
     appliedListDomainCount: Number(stored.appliedListDomainCount) || 0,
     appliedCustomDomainCount: Number(stored.appliedCustomDomainCount) || 0,
     appliedListRuleCount: Number(stored.appliedListRuleCount) || 0,
     appliedCustomRuleCount: Number(stored.appliedCustomRuleCount) || 0,
+    lastListBuildError: coerceBuildError(stored.lastListBuildError),
+    lastCustomBuildError: coerceBuildError(stored.lastCustomBuildError),
   };
+}
+
+function coerceBuildError(value) {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 export async function saveSettings(settingsPatch) {
@@ -87,11 +91,8 @@ export async function saveLists(lists) {
   return lists;
 }
 
-export async function saveListsWithRawList(
-  lists,
-  { listId, text, pendingRebuild },
-) {
-  const patch = { lists, pendingRebuild: Boolean(pendingRebuild) };
+export async function saveListsWithRawList(lists, { listId, text }) {
+  const patch = { lists };
   if (typeof text === "string") {
     patch[rawListStorageKey(listId)] = text;
   }
@@ -131,14 +132,6 @@ export async function saveCustomRules(customRules) {
   return customRules;
 }
 
-export async function savePendingRebuild(pending) {
-  await ext.storage.local.set({ pendingRebuild: pending });
-}
-
-export async function saveRulesBuiltAt(timestamp) {
-  await ext.storage.local.set({ rulesBuiltAt: timestamp });
-}
-
 export async function saveLastListUpdateAttemptAt(timestamp) {
   await ext.storage.local.set({ lastListUpdateAttemptAt: timestamp });
 }
@@ -147,34 +140,50 @@ export async function saveLastListUpdateCompletedAt(timestamp) {
   await ext.storage.local.set({ lastListUpdateCompletedAt: timestamp });
 }
 
-export async function saveAppliedSignature(signature) {
-  await ext.storage.local.set({ appliedSignature: signature });
-}
-
-export async function saveListDomainCount(count) {
-  await ext.storage.local.set({ appliedListDomainCount: count });
-}
-
-export async function saveCustomDomainCount(count) {
-  await ext.storage.local.set({ appliedCustomDomainCount: count });
-}
-
-export async function saveListRuleCount(count) {
-  await ext.storage.local.set({ appliedListRuleCount: count });
-}
-
-export async function saveCustomRuleCount(count) {
-  await ext.storage.local.set({ appliedCustomRuleCount: count });
-}
-
-function guardHostsKey(slice) {
-  return slice === "custom" ? "guardHostsCustom" : "guardHostsList";
-}
-
-export async function saveGuardHosts(slice, { block, allow }) {
+// Build errors are tracked per slice so clearing one cannot erase a standing
+// failure on the other — startup reconciliation often rebuilds only one of them.
+export async function saveSliceBuildError(slice, message) {
   await ext.storage.local.set({
-    [guardHostsKey(slice)]: { block: [...block], allow: [...allow] },
+    [slice === "custom" ? "lastCustomBuildError" : "lastListBuildError"]:
+      message ?? null,
   });
+}
+
+// Everything derived from one applied rule slice commits in a single write: the
+// navigation guard's host sets are a parallel cache of what DNR is enforcing, so
+// a worker death between separate writes could leave the guard matching against
+// hosts the applied rules no longer contain. guardCacheVersion is the guard's
+// cache key, replaced in the same write that changes what it should be caching.
+export async function saveAppliedListSlice({
+  block,
+  allow,
+  ruleCount,
+  guardCacheVersion,
+}) {
+  await ext.storage.local.set({
+    guardHostsList: serializeGuardHosts(block, allow),
+    appliedListDomainCount: block.size,
+    appliedListRuleCount: ruleCount,
+    guardCacheVersion,
+  });
+}
+
+export async function saveAppliedCustomSlice({
+  block,
+  allow,
+  ruleCount,
+  guardCacheVersion,
+}) {
+  await ext.storage.local.set({
+    guardHostsCustom: serializeGuardHosts(block, allow),
+    appliedCustomDomainCount: block.size,
+    appliedCustomRuleCount: ruleCount,
+    guardCacheVersion,
+  });
+}
+
+function serializeGuardHosts(block, allow) {
+  return { block: [...block], allow: [...allow] };
 }
 
 export async function getGuardHosts() {

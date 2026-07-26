@@ -16,7 +16,6 @@ const OPTION_TABS = [
   { id: "support", label: "Support" },
   { id: "about", label: "About" },
 ];
-let lastPendingRebuild = false;
 let editingListId = null;
 let activeTab = readActiveTab();
 
@@ -52,20 +51,12 @@ async function boot() {
 }
 
 function renderApp(state) {
-  const animatePendingIn = !lastPendingRebuild && state.pendingRebuild;
-  const animatePendingOut = lastPendingRebuild && !state.pendingRebuild;
   if (!isKnownTab(activeTab)) activeTab = DEFAULT_TAB;
 
   app.innerHTML = `
     ${renderTabs(state.settings)}
     <div class="tab-panels">
-      ${renderTabPanel(
-        "lists",
-        renderListsTab(state, {
-          animatePendingIn,
-          animatePendingOut,
-        }),
-      )}
+      ${renderTabPanel("lists", renderListsTab(state))}
       ${renderTabPanel("rules", renderRulesTab(state))}
       ${renderTabPanel("settings", renderSettingsTab(state))}
       ${renderTabPanel("support", renderSupportTab())}
@@ -75,8 +66,6 @@ function renderApp(state) {
 
   bindTabs();
   bindEvents(state);
-  animatePendingNoticeOut(animatePendingOut);
-  lastPendingRebuild = state.pendingRebuild;
 }
 
 function renderTabs(settings) {
@@ -120,7 +109,7 @@ function renderTabPanel(tabId, content) {
   `;
 }
 
-function renderListsTab(state, { animatePendingIn, animatePendingOut }) {
+function renderListsTab(state) {
   return `
     <div class="page lists-page">
       <div class="page-header">
@@ -131,7 +120,7 @@ function renderListsTab(state, { animatePendingIn, animatePendingOut }) {
         <p class="page-meta muted list-summary" id="listsMeta">${statsHtml(state)}</p>
       </div>
       <div class="list-divider" aria-hidden="true"></div>
-      ${renderPendingNotice(state.pendingRebuild || animatePendingOut, state.pendingRebuild, animatePendingIn)}
+      ${renderRuleBuildErrors(state)}
       ${renderLists(state.lists)}
       <form id="addListForm" class="row add-list-form field-group">
         <label class="field">
@@ -302,35 +291,48 @@ function renderAboutTab() {
 // Reads the blocked-domain count recorded by the worker at rebuild time rather
 // than pulling the full dynamic rule set into the page (which spikes memory on
 // large lists). Synchronous, so the stats render with the rest of the page.
+// Present tense is accurate: every list edit reapplies the slice, so this count
+// always describes what is actually enforced.
 function statsHtml(state) {
-  const listsChecked = state.lastListUpdateCompletedAt
-    ? new Date(state.lastListUpdateCompletedAt).toLocaleString()
-    : "Never";
   const domains =
     (state.appliedListDomainCount || 0) + (state.appliedCustomDomainCount || 0);
   const items = [
-    `${domains.toLocaleString()} domains blocked`,
-    `Lists checked: ${listsChecked}`,
+    `Blocking ${domains.toLocaleString()} domain${domains === 1 ? "" : "s"}`,
+    state.lastListUpdateCompletedAt
+      ? `Lists checked ${formatCheckedAt(state.lastListUpdateCompletedAt)}`
+      : "Lists never checked",
   ];
-  return items
-    .map((item) => `<span class="list-summary-item">${escapeHtml(item)}</span>`)
+  // Separator is a middle dot, escaped to keep this file ASCII.
+  return escapeHtml(items.join(" \u00b7 "));
+}
+
+// Seconds are noise on a weekly update cadence, and the full default format
+// crowds the header on narrow windows.
+function formatCheckedAt(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+// Automatic updates run from an alarm with no page open, so a rebuild that fails
+// there has no other way to reach the user. The previously applied rules are
+// still blocking; what is stale is everything since this error. Tracked per
+// slice, since one can fail while the other applies cleanly.
+function renderRuleBuildErrors({ lastListBuildError, lastCustomBuildError }) {
+  return [
+    ["list", lastListBuildError],
+    ["custom", lastCustomBuildError],
+  ]
+    .filter(([, message]) => message)
+    .map(
+      ([slice, message]) => `
+        <p class="build-error-notice" role="status" aria-live="polite">
+          Could not apply ${slice} rules: ${escapeHtml(message)} Blocking is still using the last ${slice} rules that applied.
+        </p>
+      `,
+    )
     .join("");
-}
-
-function renderPendingNotice(isVisible, isActive, shouldAnimateIn) {
-  return `
-    <p id="pendingNotice" class="pending-notice${isVisible ? " is-visible" : ""}${shouldAnimateIn ? " is-entering" : ""}" role="status" aria-live="polite" aria-hidden="${isActive ? "false" : "true"}">
-      Pending changes — run <strong>Update lists</strong> to apply.
-    </p>
-  `;
-}
-
-function animatePendingNoticeOut(shouldAnimate) {
-  if (!shouldAnimate) return;
-  const notice = app.querySelector("#pendingNotice");
-  if (!notice) return;
-  notice.getBoundingClientRect();
-  notice.classList.remove("is-visible");
 }
 
 function renderPassword(settings) {
@@ -595,9 +597,11 @@ function bindEvents(state) {
     setListsStatus("Updating lists...");
     setIndexControlsDisabled(true);
     try {
-      await runBackgroundCommand({ type: "ssb:update-all-lists" });
+      const response = await runBackgroundCommand({
+        type: "ssb:update-all-lists",
+      });
       await boot();
-      setListsStatus("All lists updated.");
+      setListsStatus(describeUpdateResult(response.result));
     } catch (error) {
       setIndexControlsDisabled(false);
       const message = error.message || "Something went wrong.";
@@ -869,6 +873,20 @@ function setAutoUpdateStatus(message) {
   if (status) {
     status.textContent = message;
   }
+}
+
+// Reports what the update actually did. "All lists updated" was a lie whenever a
+// fetch failed; failures point at the row, which carries the specific error.
+function describeUpdateResult(summary) {
+  if (!summary || typeof summary.checked !== "number") return "Lists updated.";
+  if (summary.checked === 0) return "No enabled lists to update.";
+
+  const parts = [`${summary.updated} updated`, `${summary.unchanged} unchanged`];
+  if (summary.failed > 0) parts.push(`${summary.failed} failed`);
+  const listWord = summary.checked === 1 ? "list" : "lists";
+  const detail =
+    summary.failed > 0 ? " — see the failed list below for details." : ".";
+  return `Checked ${summary.checked} ${listWord}: ${parts.join(", ")}${detail}`;
 }
 
 async function runBackgroundCommand(message) {

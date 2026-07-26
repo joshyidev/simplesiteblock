@@ -36,7 +36,6 @@ function makeState() {
       hostBlocksExact: ["should-not-export.example"],
       builtAt: 1,
     },
-    pendingRebuild: true,
     lastListUpdateAttemptAt: 2,
     lastListUpdateCompletedAt: 3,
   };
@@ -60,7 +59,6 @@ test("settings export omits derived and cached data by default", () => {
   const payload = JSON.parse(createSettingsExport(makeState()));
 
   assert.equal("compiledIndex" in payload, false);
-  assert.equal("pendingRebuild" in payload, false);
   assert.equal("rawLists" in payload, false);
   assert.equal("lastListUpdateAttemptAt" in payload, false);
   assert.equal("lastListUpdateCompletedAt" in payload, false);
@@ -265,7 +263,11 @@ test("settings import stores lists and rules and marks pending", async () => {
     assert.equal(store.lists.length, 1);
     assert.equal(store.lists[0].id, "list-1");
     assert.deepEqual(store.rawLists, {});
-    assert.equal(store.pendingRebuild, true);
+    assert.equal(
+      store.appliedListDomainCount,
+      0,
+      "imported lists have no cached bodies yet, so the list slice applies empty",
+    );
     assert.equal(store.lastListUpdateAttemptAt, 0);
     assert.equal(store.lastListUpdateCompletedAt, 0);
   } finally {
@@ -319,7 +321,11 @@ test("settings import marks URL-only lists pending", async () => {
     assert.equal(store.lists.length, 1);
     assert.equal(store.lists[0].url, "https://example.com/hosts.txt");
     assert.equal(store.customRules, "||tracker.example^");
-    assert.equal(store.pendingRebuild, true);
+    assert.equal(
+      store.appliedListDomainCount,
+      0,
+      "imported lists have no cached bodies yet, so the list slice applies empty",
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -380,7 +386,11 @@ test("settings import clears cached raw list bodies", async () => {
     await importSettingsBackup(JSON.stringify(payload));
     assert.deepEqual(removed, [rawListStorageKey("list-1")]);
     assert.equal(rawListStorageKey("list-1") in store, false);
-    assert.equal(store.pendingRebuild, true);
+    assert.equal(
+      store.appliedListDomainCount,
+      0,
+      "imported lists have no cached bodies yet, so the list slice applies empty",
+    );
   } finally {
     globalThis.chrome = originalChrome;
   }
@@ -468,7 +478,11 @@ test("settings import waits for Update All and removes its downloaded body", asy
     assert.equal(store.lists[0].id, "new-list");
     assert.equal(rawListStorageKey("old-list") in store, false);
     assert.equal(rawListStorageKey("new-list") in store, false);
-    assert.equal(store.pendingRebuild, true);
+    assert.equal(
+      store.appliedListDomainCount,
+      0,
+      "imported lists have no cached bodies yet, so the list slice applies empty",
+    );
   } finally {
     globalThis.chrome = originalChrome;
     globalThis.fetch = originalFetch;

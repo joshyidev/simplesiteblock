@@ -8,20 +8,15 @@ import {
   getRawList,
   getState,
   removeRawList,
-  saveAppliedSignature,
-  saveCustomDomainCount,
-  saveCustomRuleCount,
+  saveAppliedCustomSlice,
+  saveAppliedListSlice,
   saveCustomRules,
-  saveGuardHosts,
   saveLastListUpdateAttemptAt,
   saveLastListUpdateCompletedAt,
-  saveListDomainCount,
-  saveListRuleCount,
+  saveSliceBuildError,
   saveLists,
   saveListsWithRawList,
-  savePendingRebuild,
   saveRawList,
-  saveRulesBuiltAt,
 } from "./storage.js";
 
 export const ALARM_NAME = "update:index";
@@ -34,8 +29,10 @@ const MAX_CUSTOM_DOMAINS = 1000;
 // 5,000 across all dynamic rules. The packer emits one redirect rule per ~1,000
 // main-frame block domains, so this bounds blockable domains at ~5 million. We
 // reserve a little headroom for the (domain-capped) custom slice's redirects.
-const MAX_UNSAFE_DYNAMIC_RULES = 5000;
-const MAX_LIST_REDIRECT_RULES = MAX_UNSAFE_DYNAMIC_RULES - 10;
+const FALLBACK_MAX_UNSAFE_DYNAMIC_RULES = 5000;
+// Headroom for the custom slice's redirects. Custom rules cap at 1,000 domains,
+// which packs into a single redirect rule, so this is generous.
+const CUSTOM_REDIRECT_RESERVE = 10;
 
 // Lists and custom rules occupy disjoint dynamic-rule ID ranges so each can be
 // applied independently. Custom rules use a higher priority band so they win
@@ -83,8 +80,9 @@ async function doAddList({ name, url }) {
     ruleCount: 0,
   };
 
-  // Prime only the new subscription so its count is available immediately.
-  // Applying the list slice remains an explicit Update Lists operation.
+  // Fetch the new subscription up front so it can start blocking immediately;
+  // a list that fails to fetch is still added and contributes nothing until a
+  // later Update All succeeds.
   let outcome;
   try {
     outcome = { ok: true, result: await fetchListResult(list) };
@@ -98,8 +96,8 @@ async function doAddList({ name, url }) {
   await saveListsWithRawList([...latest.lists, storedList], {
     listId: list.id,
     text: outcome.ok ? outcome.result.downloadedText : null,
-    pendingRebuild: true,
   });
+  await applyListRules();
 
   const error = fetchOutcomeError(outcome);
   if (error) {
@@ -148,7 +146,7 @@ async function doRemoveList(listId) {
   const state = await getState({ includeRawLists: false });
   await saveLists(state.lists.filter((list) => list.id !== listId));
   await removeRawList(listId);
-  await recomputePending();
+  await applyListRules();
 }
 
 export function updateListIdentity(listId, identity) {
@@ -190,7 +188,7 @@ async function doUpdateListIdentity(listId, { name, url }) {
   if (!urlChanged) return lists;
 
   await removeRawList(listId);
-  await recomputePending();
+  await applyListRules();
   return lists;
 }
 
@@ -204,7 +202,7 @@ async function doUpdateListSettings(listId, patch) {
     list.id === listId ? { ...list, ...patch } : list,
   );
   await saveLists(lists);
-  await recomputePending();
+  await applyListRules();
 }
 
 export async function updateAllLists() {
@@ -219,41 +217,59 @@ export async function updateAllLists() {
 
 async function doUpdateAllLists() {
   await saveLastListUpdateAttemptAt(Date.now());
-  await fetchAndStoreEnabledLists();
+  const summary = await fetchAndStoreEnabledLists();
   await saveLastListUpdateCompletedAt(Date.now());
   // Rebuild both slices: this reapplies lists after the fetch and keeps the
   // custom slice consistent (also self-heals rules left by older builds).
   await rebuildAll();
+  return summary;
 }
 
-// Apply both rule slices. Used on settings import, where lists and custom rules
-// both change at once.
+// Records why one slice's build failed, against that slice's own key. Update All
+// runs from the alarm and reconciliation runs at startup, both with no UI
+// attached and their errors swallowed — without this a failed build (e.g. over
+// the redirect budget) leaves stale rules applied with nothing to explain it.
+// Rethrows so callers that do have a UI still surface the error directly.
+// Per-slice keys matter because reconciliation often rebuilds only one slice: a
+// successful custom build must not clear a standing list-build failure, which is
+// the options page's only signal that the current list data was never applied.
+async function withRuleBuildErrorRecorded(slice, rebuild) {
+  try {
+    await rebuild();
+  } catch (error) {
+    await saveSliceBuildError(slice, error?.message || "Applying rules failed.");
+    throw error;
+  }
+  await saveSliceBuildError(slice, null);
+}
+
+// Apply both rule slices. Used by Update All and by settings import, where lists
+// and custom rules both change at once. A list-slice failure aborts before the
+// custom slice, so its rules stay as last applied rather than being rebuilt
+// against a configuration that just failed to apply.
 export async function rebuildAll() {
-  await rebuildListRules();
-  await rebuildCustomRules();
+  await withRuleBuildErrorRecorded("list", rebuildListRules);
+  await withRuleBuildErrorRecorded("custom", rebuildCustomRules);
 }
 
-// Rebuild and apply the list rule slice from cached list bodies. Sets
-// pendingRebuild when an enabled list has no cached body yet (it needs a fetch
-// before it can contribute rules). Custom rules are a separate slice and are
-// untouched here.
+// Rebuild and apply the list rule slice from cached list bodies. Every list edit
+// runs this, so what is applied always matches the current configuration; a list
+// with no cached body yet simply contributes nothing until a fetch gives it one.
+// Custom rules are a separate slice and are untouched here.
 export async function rebuildListRules() {
   const state = await getState({ includeRawLists: false });
   const block = new Set();
   const allow = new Set();
-  let pending = false;
 
   for (const list of state.lists) {
     if (!list.enabled) continue;
     const text = await getRawList(list.id);
-    if (text === null) {
-      pending = true;
-      continue;
-    }
+    if (text === null) continue;
     try {
       addParsedHosts(parseListText(text, list.format), block, allow);
     } catch {
-      // Invalid cached body; the list's lastError is tracked at fetch time.
+      // Bodies are validated before caching, so this only catches junk cached by
+      // an older build. The list's lastError is tracked at fetch time.
     }
   }
 
@@ -269,14 +285,12 @@ export async function rebuildListRules() {
     rules.filter((rule) => rule.action.type === "redirect").length,
   );
   await applyRuleSlice(LIST_RULE_ID_BASE, CUSTOM_RULE_ID_BASE, rules);
-  await saveListDomainCount(blockHosts.size);
-  await saveListRuleCount(rules.length);
-  // Persist the host sets for the navigation guard before bumping rulesBuiltAt,
-  // which is how the guard knows to reload them.
-  await saveGuardHosts("list", { block: blockHosts, allow: allowHosts });
-  await saveRulesBuiltAt(Date.now());
-  await saveAppliedSignature(rebuildSignature(state));
-  await savePendingRebuild(pending);
+  await saveAppliedListSlice({
+    block: blockHosts,
+    allow: allowHosts,
+    ruleCount: rules.length,
+    guardCacheVersion: nextGuardCacheVersion(),
+  });
 }
 
 // Rebuild and apply only the custom rule slice (higher priority band). Cheap:
@@ -294,27 +308,28 @@ export async function rebuildCustomRules() {
   const allowHosts = normalizeHosts(allow);
   const rules = packRules(blockHosts, allowHosts, CUSTOM_PRIORITIES);
   await applyRuleSlice(CUSTOM_RULE_ID_BASE, Number.MAX_SAFE_INTEGER, rules);
-  await saveCustomDomainCount(blockHosts.size);
-  await saveCustomRuleCount(rules.length);
-  await saveGuardHosts("custom", { block: blockHosts, allow: allowHosts });
-  await saveRulesBuiltAt(Date.now());
+  await saveAppliedCustomSlice({
+    block: blockHosts,
+    allow: allowHosts,
+    ruleCount: rules.length,
+    guardCacheVersion: nextGuardCacheVersion(),
+  });
+}
+
+// The navigation guard's cache key: a fresh token per commit, never derived from
+// the stored value or the clock. `incognito: "split"` gives the regular and
+// incognito workers separate in-memory operation queues over one shared storage,
+// so a read-modify-write counter can hand two concurrent commits the same value,
+// and back-to-back slice commits can share a millisecond. Either way the guard
+// would keep a matcher it believes is current while a slice's hosts are missing
+// from it. Only inequality is ever tested, so uniqueness is the whole contract.
+function nextGuardCacheVersion() {
+  return crypto.randomUUID();
 }
 
 function addParsedHosts(parsed, block, allow) {
   for (const host of parsed.block) block.add(host);
   for (const host of parsed.allow) allow.add(host);
-}
-
-// Fingerprint of the inputs that determine the applied list rule slice: which
-// lists are enabled, with their format. Custom rules are excluded — they live in
-// their own slice and apply immediately, so they never make lists "pending".
-function rebuildSignature(state) {
-  return JSON.stringify(
-    state.lists
-      .filter((list) => list.enabled)
-      .map((list) => `${list.id}|${list.format}`)
-      .sort(),
-  );
 }
 
 export async function reconcileRules() {
@@ -330,33 +345,32 @@ export async function reconcileRules() {
 
   const customOrphaned = state.customRules.trim() === "" && hasCustomRules;
   const customMissing = state.appliedCustomRuleCount > 0 && !hasCustomRules;
-  if (customOrphaned || customMissing) {
-    await rebuildCustomRules();
-  }
+  const needsCustomRebuild = customOrphaned || customMissing;
 
-  const orphanedListRules = state.appliedSignature === "" && hasListRules;
+  // The applied rule count answers both questions. Zero with rules present means
+  // rules outlived the storage that made them (an unpacked reload or a reset);
+  // non-zero with the slice empty means they vanished. Rules never diverge from
+  // the configuration otherwise, because every list edit reapplies the slice.
+  const orphanedListRules = state.appliedListRuleCount === 0 && hasListRules;
   const listRulesMissing = state.appliedListRuleCount > 0 && !hasListRules;
-  if (orphanedListRules || listRulesMissing) {
-    await rebuildListRules();
+  const needsListRebuild = orphanedListRules || listRulesMissing;
+
+  // Each slice records against its own key, so rebuilding one here leaves any
+  // standing error on the other — and the slice it did not touch — untouched.
+  if (needsCustomRebuild) {
+    await withRuleBuildErrorRecorded("custom", rebuildCustomRules);
+  }
+  if (needsListRebuild) {
+    await withRuleBuildErrorRecorded("list", rebuildListRules);
   }
 }
 
-// Set pendingRebuild to reflect whether a rebuild would actually change the
-// applied rules: the config diverged from what was last applied, or an enabled
-// list still has no cached body to contribute. A net-zero edit (e.g. disable
-// then re-enable a list) lands back on the applied signature and clears pending.
-export async function recomputePending() {
-  const state = await getState({ includeRawLists: false });
-  let pending = rebuildSignature(state) !== state.appliedSignature;
-  if (!pending) {
-    for (const list of state.lists) {
-      if (list.enabled && (await getRawList(list.id)) === null) {
-        pending = true;
-        break;
-      }
-    }
-  }
-  await savePendingRebuild(pending);
+// Reapply the list slice after a list edit. Adding, removing, enabling,
+// disabling, or repointing a list takes effect immediately rather than waiting
+// for the next Update All, so a disabled or removed list stops blocking at once.
+// Records against the list slice's error key like every other list build.
+function applyListRules() {
+  return withRuleBuildErrorRecorded("list", rebuildListRules);
 }
 
 async function fetchAndStoreEnabledLists() {
@@ -381,18 +395,28 @@ async function fetchAndStoreEnabledLists() {
   const fetchedLists = new Map(enabledLists.map((list) => [list.id, list]));
   const latest = await getState({ includeRawLists: false });
   const rawWrites = [];
+  // Counted from the outcomes actually merged, so a list edited or removed
+  // mid-fetch (dropped by sameListSource) is not reported as checked.
+  const summary = { checked: 0, updated: 0, unchanged: 0, failed: 0 };
   const lists = latest.lists.map((list) => {
     const fetchedList = fetchedLists.get(list.id);
     const outcome = fetchResults.get(list.id);
     if (!outcome || !sameListSource(list, fetchedList)) return list;
-    if (outcome.ok && outcome.result.downloadedText !== null) {
+    summary.checked += 1;
+    if (!outcome.ok) {
+      summary.failed += 1;
+    } else if (outcome.result.downloadedText !== null) {
+      summary.updated += 1;
       rawWrites.push(saveRawList(list.id, outcome.result.downloadedText));
+    } else {
+      summary.unchanged += 1;
     }
     return mergeListFetchOutcome(list, outcome);
   });
 
   await Promise.all(rawWrites);
   await saveLists(lists);
+  return summary;
 }
 
 function sameListSource(current, fetched) {
@@ -404,6 +428,10 @@ function sameListSource(current, fetched) {
   );
 }
 
+// Resolves only for a download that parsed cleanly. A body that fails to parse
+// rejects like a network failure so the caller keeps the last known-good cached
+// body instead of overwriting it with junk (a list URL that starts serving an
+// error page would otherwise silently stop blocking on the next auto-update).
 async function fetchListResult(list) {
   const cachedText = await getRawList(list.id);
   const result = await fetchList(list, {
@@ -414,23 +442,18 @@ async function fetchListResult(list) {
   }
 
   const text = result.notModified ? cachedText : result.text;
-  let parseError = null;
-  let ruleCount = 0;
-  try {
-    ruleCount = countRules(parseListText(text, list.format));
-  } catch (error) {
-    parseError = error;
-  }
+  const ruleCount = countRules(parseListText(text, list.format));
 
   return {
     downloadedText: result.notModified ? null : result.text,
     etag: result.etag,
     lastModified: result.lastModified,
     ruleCount,
-    parseError,
   };
 }
 
+// A failed fetch or rejected body keeps the list's cached validators and rule
+// count: they still describe the body that stays cached and applied.
 function mergeListFetchOutcome(list, outcome) {
   if (!outcome.ok) {
     return {
@@ -441,18 +464,16 @@ function mergeListFetchOutcome(list, outcome) {
   const { result } = outcome;
   return {
     ...list,
-    lastError: result.parseError?.message || null,
+    lastError: null,
     etag: result.etag ?? list.etag,
     lastModified: result.lastModified ?? list.lastModified,
-    ruleCount: result.parseError ? 0 : result.ruleCount,
+    ruleCount: result.ruleCount,
   };
 }
 
 function fetchOutcomeError(outcome) {
-  if (!outcome.ok) {
-    return outcome.error?.message || "List update failed.";
-  }
-  return outcome.result.parseError?.message || null;
+  if (outcome.ok) return null;
+  return outcome.error?.message || "List update failed.";
 }
 
 export function updateCustomRules(rawRules) {
@@ -463,13 +484,23 @@ async function doUpdateCustomRules(rawRules) {
   const customRules = String(rawRules || "");
   assertCustomRulesWithinLimit(parseCustomRules(customRules));
   await saveCustomRules(customRules);
-  await rebuildCustomRules();
+  await withRuleBuildErrorRecorded("custom", rebuildCustomRules);
 }
 
-// Guards against exceeding DNR's 5,000 unsafe (redirect) rule cap. Throws a
+// The cap on unsafe (redirect) dynamic rules, read from the runtime so a browser
+// that raises or lowers it is respected. Only `redirect` is unsafe in DNR;
+// `allow` rules are safe and do not count against this.
+function maxListRedirectRules() {
+  const cap =
+    ext.declarativeNetRequest?.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES ??
+    FALLBACK_MAX_UNSAFE_DYNAMIC_RULES;
+  return cap - CUSTOM_REDIRECT_RESERVE;
+}
+
+// Guards against exceeding DNR's unsafe (redirect) rule cap. Throws a
 // user-facing message rather than letting updateDynamicRules fail cryptically.
 export function assertListRedirectBudget(redirectRuleCount) {
-  if (redirectRuleCount > MAX_LIST_REDIRECT_RULES) {
+  if (redirectRuleCount > maxListRedirectRules()) {
     throw new Error(
       "Your enabled lists block more domains than Chrome's rule limit allows (about 5 million). Disable or remove some lists, then run Update All again.",
     );
