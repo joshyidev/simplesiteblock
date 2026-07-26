@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SimpleSiteBlock",
   "description": "SimpleSiteBlock is a simple site blocker for blocking distracting sites.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "permissions": [
     "declarativeNetRequest",
     "storage",
